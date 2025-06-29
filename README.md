@@ -14,7 +14,7 @@
 ## 🎮 支持的控制器
 
 - Xbox 360/One/Series 控制器
-- PlayStation 3/4/5 控制器~~（没有经过测试）~~
+- PlayStation 3/4/5 控制器~~没有经过测试~~
 - 其他标准游戏手柄（通过DirectInput）
 
 ## 📦 系统要求
