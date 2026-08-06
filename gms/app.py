@@ -224,7 +224,8 @@ class App:
         """按配置重启虚拟 MIDI 端口（热应用）"""
         vm = self.config.current()["virtual_midi"]
         if vm.get("enabled"):
-            self.ports.start(vm.get("port_name", "Gamepad MIDI 1"))
+            self.ports.start(vm.get("port_name", "Gamepad MIDI 1"),
+                             backend_name=vm.get("backend", "tevirtualmidi"))
         else:
             self.ports.stop()
             self.bus.emit("virtual.state", available=self.ports.backend.is_available(),

@@ -306,19 +306,34 @@ function renderMain() {
   $page.appendChild(cMap);
 
   // 虚拟端口卡片
-  const cV = card("虚拟 MIDI 端口", "teVirtualMIDI 内核（loopMIDI 同源驱动），无需安装 loopMIDI");
+  const portsInfo = state.app.ports || {};
+  const bkNames = { tevirtualmidi: "teVirtualMIDI（loopMIDI 同源）", windows_midi_services: "Windows MIDI Services" };
+  const cV = card("虚拟 MIDI 端口", "双内核：teVirtualMIDI 默认，Windows MIDI Services 备选（Win11 24H2+）");
   const vRow = el("div", "row wrap");
-  vRow.appendChild(el("span", "badge " + (state.app.ports.virtual_running ? "ok" : state.app.ports.virtual_available ? "warn" : "err"),
-    state.app.ports.virtual_running ? "运行中" : state.app.ports.virtual_available ? "未运行" : "内核不可用"));
-  vRow.appendChild(el("span", "muted", esc(state.app.ports.virtual_error || "")));
+  vRow.appendChild(el("span", "badge " + (portsInfo.virtual_running ? "ok" : portsInfo.virtual_available ? "warn" : "err"),
+    portsInfo.virtual_running ? "运行中" : portsInfo.virtual_available ? "未运行" : "内核不可用"));
+  vRow.appendChild(el("span", "muted", esc(portsInfo.virtual_error || "内核：" + (bkNames[vm.backend] || vm.backend))));
   vRow.appendChild(el("span", "spacer"));
   vRow.appendChild(el("span", null, "启用"));
   vRow.appendChild(toggleInput(vm.enabled, async v => savePatch({ virtual_midi: { enabled: v } })));
   cV.appendChild(vRow);
+  const bkRow = el("div", "row wrap");
+  const bkOpts = {};
+  Object.keys(bkNames).forEach(k => {
+    const b = (portsInfo.backends || {})[k];
+    const suffix = b ? (b.available ? "" : "（不可用）") : "";
+    bkOpts[k] = bkNames[k] + suffix;
+  });
+  bkRow.appendChild(field("内核", selectInput(bkOpts, vm.backend, async v => savePatch({ virtual_midi: { backend: v } }))));
+  cV.appendChild(bkRow);
+  const wms = (portsInfo.backends || {}).windows_midi_services;
+  if (wms && !wms.available && wms.error) {
+    cV.appendChild(el("div", "small-note", "Windows MIDI Services 不可用原因：" + esc(wms.error)));
+  }
   const portRow = el("div", "row");
   portRow.appendChild(field("端口名称", textInput(vm.port_name, debounce(v => savePatch({ virtual_midi: { port_name: v } }), 400), 180)));
   cV.appendChild(portRow);
-  cV.appendChild(el("div", "small-note", "修改端口名/开关会自动重建虚拟端口（热应用）"));
+  cV.appendChild(el("div", "small-note", "修改端口名/内核/开关会自动重建虚拟端口（热应用）"));
   $page.appendChild(cV);
 }
 

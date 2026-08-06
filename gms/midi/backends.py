@@ -130,11 +130,16 @@ class TeVirtualMidiBackend(VirtualMidiBackend):
 # ---- 端口管理 ----
 
 class MidiPortManager:
-    """管理虚拟端口 + 系统端口输出。"""
+    """管理虚拟端口（双内核）+ 系统端口输出。"""
 
     def __init__(self, bus):
         self.bus = bus
-        self.backend = TeVirtualMidiBackend()
+        from .wms_backend import WindowsMidiServicesBackend
+        self.backends = {
+            "tevirtualmidi": TeVirtualMidiBackend(),
+            "windows_midi_services": WindowsMidiServicesBackend(),
+        }
+        self.backend = self.backends["tevirtualmidi"]
         self.virtual_handle = None
         self.virtual_name = ""
         self._mido_out = None
@@ -143,9 +148,12 @@ class MidiPortManager:
 
     # ---- 生命周期 ----
 
-    def start(self, port_name: str):
+    def start(self, port_name: str, backend_name: str | None = None):
+        """按指定内核（缺省 tevirtualmidi）创建虚拟端口"""
         self._started = True
         self.virtual_name = port_name
+        if backend_name in self.backends:
+            self.backend = self.backends[backend_name]
         self._open_virtual(port_name)
 
     def stop(self):
@@ -156,9 +164,19 @@ class MidiPortManager:
     def _open_virtual(self, port_name: str):
         self._close_virtual()
         if not self.backend.is_available():
-            self.bus.emit("log", message=f"虚拟MIDI内核不可用：{self.backend.error}，仅使用系统端口")
-            self.bus.emit("virtual.state", available=False, running=False, error=self.backend.error)
-            return
+            # 首选内核不可用时尝试回退 teVirtualMIDI
+            fallback = self.backends["tevirtualmidi"]
+            if self.backend.name != "tevirtualmidi" and fallback.is_available():
+                self.bus.emit("log", message=(
+                    f"内核 {self.backend.name} 不可用：{self.backend.error}；"
+                    f"已回退 teVirtualMIDI"))
+                self.backend = fallback
+            else:
+                self.bus.emit("log", message=(
+                    f"虚拟MIDI内核不可用：{self.backend.error}，仅使用系统端口"))
+                self.bus.emit("virtual.state", available=False, running=False,
+                              error=self.backend.error)
+                return
         try:
             self.virtual_handle = self.backend.create_port(
                 port_name, on_input=lambda data: self.bus.emit("midi.input", data=data))
@@ -235,6 +253,14 @@ class MidiPortManager:
             "virtual_running": bool(self.virtual_handle),
             "virtual_port": self.virtual_name,
             "virtual_error": getattr(self.backend, "error", ""),
+            "virtual_backend": self.backend.name,
+            "backends": {
+                name: {
+                    "available": b.is_available(),
+                    "error": getattr(b, "error", ""),
+                }
+                for name, b in self.backends.items()
+            },
             "outputs": self.output_names(),
             "selected_output": self._mido_out_name,
         }
