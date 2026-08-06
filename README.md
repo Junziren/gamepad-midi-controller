@@ -52,6 +52,14 @@ python -m gms
 python -m unittest discover -s tests -v
 ```
 
+## 📦 打包分发
+
+```bat
+build.bat   # 产物：dist\GamepadMIDIStudio\GamepadMIDIStudio.exe
+```
+
+打包后首次运行仍会自动创建虚拟 MIDI 端口；若目标机器缺少 teVirtualMIDI 驱动，将自动降级为系统端口模式。
+
 ## 🗂 目录结构
 
 ```
@@ -71,6 +79,12 @@ profiles/               # 用户预设（不入库）
 ```
 
 ## 📝 更新日志
+
+### v0.1.1
+- 修复十字键(hat)音符映射，主控台新增 ←→ 指示灯
+- 音序器可视化编辑：编辑模式选中格子，调音高/力度/门限/八度
+- 键盘打击垫逐格 MIDI Learn（格子右上角 L）
+- 打包支持：`build.bat` → `dist\GamepadMIDIStudio\GamepadMIDIStudio.exe`
 
 ### v0.1.0（重构版）
 - 全新玻璃拟态 UI（pywebview + WebView2）
