@@ -40,11 +40,12 @@ python -m gms
 
 系统要求：Windows 10/11 64 位、Python 3.11+、WebView2 运行时（Win11 自带）。
 
-## 🔌 虚拟 MIDI 端口
+## 🔌 虚拟 MIDI 端口（双内核）
 
-- 程序启动自动创建虚拟端口（teVirtualMIDI 内核），DAW 中直接启用该输入端口即可，无需安装 loopMIDI。
+- **teVirtualMIDI（默认）**：loopMIDI 同款签名驱动，Win7-11 全兼容，启动自动创建端口（默认 `Gamepad MIDI 1`）。
+- **Windows MIDI Services（备选，Win11 24H2+）**：系统 `midisrv` 平台服务已内置；应用层需安装 Windows MIDI Services SDK/运行时 且 Python 具备 MIDI2 投影（`winrt-Microsoft.Windows.Devices.Midi2` 或放置投影到 `gms\winrt_ext`）。主控台可切换内核，选中但不可用时自动回退 teVirtualMIDI 并提示原因。
 - 系统已装 loopMIDI 时也兼容：端口列表会枚举全部系统输出端口，可在设置中选择。
-- 内核缺失时自动降级为「仅使用系统端口」，界面状态灯提示。
+- 双内核均缺失时自动降级为「仅使用系统端口」，界面状态灯提示。
 
 ## 🧪 测试
 
@@ -79,6 +80,16 @@ profiles/               # 用户预设（不入库）
 ```
 
 ## 📝 更新日志
+
+### v0.1.3
+- 推进 Windows MIDI Services 备选内核：服务/运行时/投影三级检测、
+  主控台内核切换（不可用时自动回退 teVirtualMIDI 并提示原因）、
+  loopback 端点实现骨架（环境具备 SDK 后即插即用）
+
+### v0.1.2
+- 多手柄选择与切换、虚拟端口配置热应用（改名/换内核即时生效）
+- 音序器每步 CC 输出与 Swing 控件
+- Clip 可视化事件编辑器（模态表格，逐事件编辑）
 
 ### v0.1.1
 - 修复十字键(hat)音符映射，主控台新增 ←→ 指示灯
