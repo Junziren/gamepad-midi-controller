@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gamepad MIDI Studio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg-glow"></div>
+
+<header class="topbar glass">
+  <div class="brand"><span class="brand-mark">GMS</span> Gamepad MIDI Studio</div>
+  <div class="status-leds">
+    <div class="led" id="led-gamepad"><span class="dot"></span><span class="led-txt">手柄</span></div>
+    <div class="led" id="led-virtual"><span class="dot"></span><span class="led-txt">虚拟端口</span></div>
+    <div class="led" id="led-midi"><span class="dot"></span><span class="led-txt">MIDI</span></div>
+  </div>
+  <div class="top-right">
+    <span class="chip" id="profile-label">—</span>
+    <span class="chip" id="version-label"></span>
+  </div>
+</header>
+
+<nav class="sidebar glass">
+  <button data-page="main" class="nav-btn active"><span class="nav-ico">🎮</span>主控</button>
+  <button data-page="play" class="nav-btn"><span class="nav-ico">🎹</span>演奏</button>
+  <button data-page="seq" class="nav-btn"><span class="nav-ico">◼</span>序列</button>
+  <button data-page="mod" class="nav-btn"><span class="nav-ico">🔄</span>调制</button>
+  <button data-page="mapper" class="nav-btn"><span class="nav-ico">⇄</span>映射层</button>
+  <button data-page="settings" class="nav-btn"><span class="nav-ico">⚙</span>设置</button>
+</nav>
+
+<main id="page" class="page"></main>
+
+<div id="toast" class="toast"></div>
+<div id="learn-banner" class="learn-banner glass hidden">🎯 MIDI 学习中 — 请按下手柄按键 / 推动摇杆 / 按键盘键</div>
+
+<script src="app.js"></script>
+</body>
+</html>
