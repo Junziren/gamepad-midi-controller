@@ -3,6 +3,7 @@
 "use strict";
 
 const state = { config: null, app: null, page: "main", learn: { active: false }, toolStates: {} };
+let seqEdit = { mode: false, sel: -1 };
 
 /* ---------- API 桥 ---------- */
 function api(name, ...args) {
@@ -57,11 +58,12 @@ function toggleInput(checked, onchange) {
   return wrap;
 }
 
-function sliderInput(value, min, max, step, oninput) {
+function sliderInput(value, min, max, step, onchange) {
   const inp = document.createElement("input");
   inp.type = "range"; inp.min = min; inp.max = max; inp.step = step; inp.value = value;
   const out = el("output", null, value);
-  inp.addEventListener("input", () => { out.textContent = inp.value; oninput(parseFloat(inp.value)); });
+  inp.addEventListener("input", () => { out.textContent = inp.value; });
+  inp.addEventListener("change", () => onchange(parseFloat(inp.value)));
   const holder = el("div", "row");
   holder.appendChild(inp);
   holder.appendChild(out);
@@ -107,7 +109,7 @@ function card(title, hint) {
 
 async function savePatch(patch, toolId) {
   state.config = await api("set_config", patch, toolId || "");
-  afterConfig();
+  updateLeds();
 }
 
 /* ---------- 页面渲染 ---------- */
@@ -175,8 +177,10 @@ function renderMain() {
   viz.appendChild(stickViz("右摇杆", "lsR"));
   cGp.appendChild(viz);
   const btnViz = el("div", "btn-viz");
+  btnViz.style.gridTemplateColumns = "repeat(7, 1fr)";
   [["A", 0], ["B", 1], ["X", 2], ["Y", 3], ["LB", 4], ["RB", 5],
-   ["◀", 6], ["▶", 7], ["L3", 8], ["R3", 9], ["↑", 10], ["↓", 11]].forEach(([name, idx]) => {
+   ["◀", 6], ["▶", 7], ["L3", 8], ["R3", 9], ["↑", 10], ["↓", 11],
+   ["←", 12], ["→", 13]].forEach(([name, idx]) => {
     const cell = el("div", "btn-cell");
     cell.id = "bcell-" + idx;
     cell.innerHTML = "<b>" + name + "</b>";
@@ -190,7 +194,7 @@ function renderMain() {
   modeRow.appendChild(el("span", null, "当前模式"));
   const modeSel = selectInput(
     { relative: "加速度 / 相对模式", xy_absolute: "坐标映射模式（按住 L3/R3）" },
-    cfg.mode, async v => savePatch({ gamepad: { mode: v } }));
+    cfg.mode, async v => { await savePatch({ gamepad: { mode: v } }); render(); });
   modeRow.appendChild(modeSel);
   modeRow.appendChild(el("span", "muted", cfg.mode === "xy_absolute" ? "按住 L3=左摇杆绝对XY，R3=右摇杆绝对XY；松开后 CC 值保持" : "摇杆归位停止改变参数值（不回中）"));
   cMode.appendChild(modeRow);
@@ -202,7 +206,7 @@ function renderMain() {
   grid.appendChild(field("摇杆灵敏度", sen.holder));
   const dz = sliderInput(cfg.deadzone, 0, 0.5, 0.01, debounce(v => savePatch({ gamepad: { deadzone: v } }), 120));
   grid.appendChild(field("死区", dz.holder));
-  const curveSel = selectInput({ linear: "线性", exponential: "指数" }, cfg.curve, async v => savePatch({ gamepad: { curve: v } }));
+  const curveSel = selectInput({ linear: "线性", exponential: "指数" }, cfg.curve, async v => { await savePatch({ gamepad: { curve: v } }); render(); });
   grid.appendChild(field("响应曲线", curveSel));
   const expRow = el("div");
   if (cfg.curve === "exponential") {
@@ -223,7 +227,7 @@ function renderMain() {
   const tg = el("div", "row wrap");
   tg.appendChild(field("扳机模式", selectInput(
     { note: "开关音符", cc: "模拟 CC", velocity: "音符 + 扳机力度" }, cfg.trigger_mode,
-    async v => savePatch({ gamepad: { trigger_mode: v } }))));
+    async v => { await savePatch({ gamepad: { trigger_mode: v } }); render(); })));
   if (cfg.trigger_mode === "cc") {
     tg.appendChild(field("LT → CC", numberInput(cfg.trigger_cc_lt, 1, 127, debounce(v => savePatch({ gamepad: { trigger_cc_lt: v } }), 200))));
     tg.appendChild(field("RT → CC", numberInput(cfg.trigger_cc_rt, 1, 127, debounce(v => savePatch({ gamepad: { trigger_cc_rt: v } }), 200))));
@@ -235,7 +239,7 @@ function renderMain() {
   const vg = el("div", "row wrap");
   vg.appendChild(field("力度模式", selectInput(
     { fixed: "固定值", hold: "按住时长增长", random: "随机" }, cfg.velocity_mode,
-    async v => savePatch({ gamepad: { velocity_mode: v } }))));
+    async v => { await savePatch({ gamepad: { velocity_mode: v } }); render(); })));
   if (cfg.velocity_mode === "fixed") {
     vg.appendChild(field("固定力度", numberInput(cfg.velocity_fixed, 1, 127, debounce(v => savePatch({ gamepad: { velocity_fixed: v } }), 200))));
   } else {
@@ -372,12 +376,17 @@ function renderPlay() {
         if (!isNaN(note)) await savePatch({ tools: { keyboard_pads: { pads: t3.pads.map((q, j) => j === i ? Object.assign({}, q, { note: note }) : q) } } }, "keyboard_pads");
       }
     };
+    const lb = el("span", "pad-learn", "L");
+    lb.title = "学习此格键盘键";
+    lb.onclick = (e) => {
+      e.stopPropagation();
+      api("learn_start", { kind: "pad_key", index: i });
+    };
+    cell.appendChild(lb);
     padGrid.appendChild(cell);
   });
   c3.appendChild(padGrid);
-  const learnBtn = el("button", "btn learn", "学习按键绑定");
-  learnBtn.onclick = () => api("learn_start", { kind: "pad_key", index: 0 });
-  c3.appendChild(learnBtn);
+  c3.appendChild(el("div", "small-note", "点击格子改音符；点格子右上角 L 学习键盘键（点后按任意键绑定）"));
   grid.appendChild(c3);
 
   // 和弦/琶音
@@ -464,6 +473,13 @@ function renderSeq() {
   stopBtn.onclick = () => api("tool_action", "step_sequencer", "stop", {});
   ctrl.appendChild(playBtn);
   ctrl.appendChild(stopBtn);
+  const editBtn = el("button", "btn" + (seqEdit.mode ? " primary" : ""), seqEdit.mode ? "✎ 编辑中（点击格子选择）" : "✎ 编辑音序");
+  editBtn.onclick = () => {
+    seqEdit.mode = !seqEdit.mode;
+    if (!seqEdit.mode) seqEdit.sel = -1;
+    renderSeq();
+  };
+  ctrl.appendChild(editBtn);
   ctrl.appendChild(field("BPM", numberInput(t2.bpm, 30, 300, debounce(v => savePatch({ tools: { step_sequencer: { bpm: v } } }), 200), 70)));
   ctrl.appendChild(field("步数", selectInput({ "8": "8", "16": "16", "32": "32" }, t2.steps, async v => savePatch({ tools: { step_sequencer: { steps: parseInt(v, 10) } } }))));
   ctrl.appendChild(field("调制", selectInput({ none: "关", note: "摇杆→音高", cc: "摇杆→CC" }, t2.modulate, async v => savePatch({ tools: { step_sequencer: { modulate: v } } }))));
@@ -472,15 +488,44 @@ function renderSeq() {
   gridEl.id = "seq-grid";
   gridEl.dataset.steps = t2.steps;
   t2.on.forEach((on, i) => {
-    const cell = el("div", "seq-cell" + (on ? " on" : ""));
+    const cell = el("div", "seq-cell" + (on ? " on" : "") +
+      (seqEdit.mode && seqEdit.sel === i ? " selected" : ""));
     cell.id = "seq-cell-" + i;
-    cell.innerHTML = "<b>" + noteName(t2.notes[i]) + "</b>";
-    cell.onclick = () => api("tool_action", "step_sequencer", "toggle_step", { index: i });
+    cell.innerHTML = "<b>" + noteName(t2.notes[i]) + "</b>" + (on ? "<br>" + t2.velocities[i] : "");
+    cell.onclick = () => {
+      if (seqEdit.mode) {
+        seqEdit.sel = i;
+        renderSeq();
+      } else {
+        api("tool_action", "step_sequencer", "toggle_step", { index: i });
+      }
+    };
     gridEl.appendChild(cell);
   });
   c2.appendChild(gridEl);
-  c2.appendChild(el("div", "small-note", "点击格子开关步进；音高/力度/门限可在 profiles JSON 中调（后续版本提供可视化编辑）"));
   grid.appendChild(c2);
+
+  // 步编辑面板
+  if (seqEdit.mode && seqEdit.sel >= 0) {
+    const s = seqEdit.sel;
+    const panel = card("步 " + (s + 1) + " 编辑", "音高 / 力度 / 门限（拖动松手保存）");
+    const pRow = el("div", "row wrap");
+    const noteInp = numberInput(t2.notes[s], 0, 127, debounce(v => savePatch({ tools: { step_sequencer: { notes: t2.notes.map((n, j) => j === s ? v : n) } } }), 250));
+    pRow.appendChild(field("音高", noteInp));
+    pRow.appendChild(el("span", "muted", noteName(t2.notes[s])));
+    const velS = sliderInput(t2.velocities[s], 1, 127, 1, v => savePatch({ tools: { step_sequencer: { velocities: t2.velocities.map((n, j) => j === s ? v : n) } } }));
+    pRow.appendChild(field("力度", velS.holder));
+    const gateS = sliderInput(Math.round(t2.gates[s] * 100), 10, 100, 5, v => savePatch({ tools: { step_sequencer: { gates: t2.gates.map((n, j) => j === s ? v / 100 : n) } } }));
+    pRow.appendChild(field("门限 %", gateS.holder));
+    const upBtn = el("button", "btn small", "▲ 高八度");
+    upBtn.onclick = () => savePatch({ tools: { step_sequencer: { notes: t2.notes.map((n, j) => j === s ? Math.min(127, n + 12) : n) } } });
+    const dnBtn = el("button", "btn small", "▼ 低八度");
+    dnBtn.onclick = () => savePatch({ tools: { step_sequencer: { notes: t2.notes.map((n, j) => j === s ? Math.max(0, n - 12) : n) } } });
+    pRow.appendChild(upBtn);
+    pRow.appendChild(dnBtn);
+    panel.appendChild(pRow);
+    grid.appendChild(panel);
+  }
 
   $page.appendChild(grid);
 }

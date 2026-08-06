@@ -19,12 +19,15 @@ except Exception:  # 环境缺依赖时保持可导入
 # ---- DLL 定位 ----
 
 def _find_tevirtualmidi_dll() -> str | None:
+    bundle = getattr(sys, "_MEIPASS", "")
     candidates = [
         os.environ.get("TEVIRTUALMIDI_DLL", ""),
         r"C:\Windows\System32\teVirtualMIDI64.dll",
         r"C:\Windows\System32\teVirtualMIDI.dll",
         r"C:\Program Files (x86)\Tobias Erichsen\loopMIDI\teVirtualMIDI64.dll",
         str(Path(__file__).resolve().parent.parent.parent / "teVirtualMIDI64.dll"),
+        str(Path(bundle) / "teVirtualMIDI64.dll") if bundle else "",
+        str(Path(sys.executable).resolve().parent / "teVirtualMIDI64.dll"),
     ]
     for c in candidates:
         if c and Path(c).exists():

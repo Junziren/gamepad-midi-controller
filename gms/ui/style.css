@@ -281,6 +281,14 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .seq-cell:hover { border-color: var(--stroke-strong); }
 .seq-cell.on { background: linear-gradient(135deg, rgba(110,231,255,.35), rgba(167,139,250,.3)); color: #fff; }
 .seq-cell.playing { border-color: var(--accent); box-shadow: 0 0 12px rgba(110,231,255,.6); }
+.seq-cell.selected { border-color: var(--warn); box-shadow: 0 0 12px rgba(251,191,36,.5); }
+.seq-cell .pad-learn {
+  position: absolute; top: 2px; right: 2px; font-size: 9px; line-height: 1;
+  padding: 2px 5px; border-radius: 6px; cursor: pointer;
+  background: rgba(251,191,36,.18); color: var(--warn); border: 1px solid rgba(251,191,36,.4);
+}
+.seq-cell .pad-learn:hover { background: rgba(251,191,36,.3); }
+.seq-cell { position: relative; }
 
 /* Clip 列表 */
 .clip-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid var(--stroke); margin-bottom: 8px; }

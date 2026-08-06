@@ -25,6 +25,7 @@ class GamepadEngine:
         self.running = False
         self.button_states = {}       # 按钮idx -> 是否按下
         self.trigger_states = {"lt": False, "rt": False}
+        self.last_hat = (0, 0)
         self.hold_start = {}          # 按钮idx -> 按下时刻(力度hold模式)
         self.cc_values = {}           # cc -> float（相对模式当前值）
         self._last_abs = {}           # (channel,cc) -> 上次绝对值
@@ -78,6 +79,11 @@ class GamepadEngine:
         for side in ("lt", "rt"):
             if self.trigger_states[side]:
                 self._trigger_note_off(side)
+        hat_dir = {(0, 1): "dpad_up", (0, -1): "dpad_down",
+                   (-1, 0): "dpad_left", (1, 0): "dpad_right"}.get(self.last_hat)
+        if hat_dir and hat_dir in cfg["note_mappings"]:
+            self.midi.note_off(int(cfg["note_mappings"][hat_dir]))
+        self.last_hat = (0, 0)
         self.button_states.clear()
         self.trigger_states = {"lt": False, "rt": False}
 
@@ -96,6 +102,7 @@ class GamepadEngine:
                 else:
                     self._handle_relative(cfg)
                 self._handle_triggers(cfg)
+                self._handle_hat(cfg)
                 self._handle_buttons(cfg)
                 self._push_state()
             except Exception as exc:
@@ -216,6 +223,28 @@ class GamepadEngine:
         note = int(cfg["note_mappings"].get(side, 60))
         self.midi.note_off(note)
 
+    # ---- 十字键 (hat) ----
+
+    def _handle_hat(self, cfg):
+        if self.joystick.get_numhats() < 1:
+            return
+        hat = self.joystick.get_hat(0)
+        if hat == self.last_hat:
+            return
+        old_hat = self.last_hat
+        self.last_hat = hat
+        dir_map = {(0, 1): "dpad_up", (0, -1): "dpad_down",
+                   (-1, 0): "dpad_left", (1, 0): "dpad_right"}
+        old_key = dir_map.get(old_hat)
+        if old_key and old_key in cfg["note_mappings"]:
+            self.midi.note_off(int(cfg["note_mappings"][old_key]))
+        new_key = dir_map.get(hat)
+        if new_key and new_key in cfg["note_mappings"]:
+            note = int(cfg["note_mappings"][new_key])
+            velocity = self._velocity_for(cfg)
+            self.midi.note_on(note, velocity)
+            self.bus.emit("log", message=f"十字键{new_key} -> 音符{note} vel={velocity}")
+
     # ---- 按钮 ----
 
     def _handle_buttons(self, cfg):
@@ -301,6 +330,13 @@ class GamepadEngine:
         cfg = self.get_config()["gamepad"]
         axes = [round(self.joystick.get_axis(i), 3) for i in range(self.joystick.get_numaxes())]
         buttons = [bool(self.joystick.get_button(i)) for i in range(self.joystick.get_numbuttons())]
+        # 十字键合成到 buttons[10..13]：↑ ↓ ← →
+        buttons += [False] * max(0, 4 - len(buttons))
+        hat = self.last_hat
+        buttons[10] = buttons[10] or (hat == (0, 1))
+        buttons[11] = buttons[11] or (hat == (0, -1))
+        buttons[12] = buttons[12] or (hat == (-1, 0))
+        buttons[13] = buttons[13] or (hat == (1, 0))
         self.bus.emit("gamepad.state",
                       connected=True,
                       name=self.joystick.get_name(),

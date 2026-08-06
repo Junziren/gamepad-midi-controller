@@ -10,9 +10,10 @@ from gms.core import axis_to_cc_absolute
 
 
 class FakeJoystick:
-    def __init__(self, axes=None, buttons=None):
+    def __init__(self, axes=None, buttons=None, hat=(0, 0)):
         self._axes = axes or [0.0] * 6
         self._buttons = buttons or [False] * 12
+        self._hat = hat
 
     def get_name(self):
         return "Fake Pad"
@@ -28,6 +29,12 @@ class FakeJoystick:
 
     def get_button(self, i):
         return self._buttons[i]
+
+    def get_numhats(self):
+        return 1
+
+    def get_hat(self, i):
+        return self._hat
 
 
 class FakeMidi:
@@ -147,6 +154,40 @@ class TestRelativeMode(unittest.TestCase):
         eng.joystick._axes[0] = 0.0
         eng._handle_relative(cfg["gamepad"])
         self.assertEqual(midi.calls, [])
+
+
+class TestHat(unittest.TestCase):
+    def test_hat_dpad_up_note(self):
+        eng, midi, cfg = make_engine()
+        eng.joystick._hat = (0, 1)   # 十字键上
+        eng._handle_hat(cfg["gamepad"])
+        self.assertIn(("note_on", 67, 127), midi.calls)  # dpad_up=67
+
+    def test_hat_release_off(self):
+        eng, midi, cfg = make_engine()
+        eng.joystick._hat = (1, 0)   # 右
+        eng._handle_hat(cfg["gamepad"])
+        self.assertIn(("note_on", 72, 127), midi.calls)
+        eng.joystick._hat = (0, 0)   # 回中
+        eng._handle_hat(cfg["gamepad"])
+        self.assertIn(("note_off", 72), midi.calls)
+
+    def test_hat_switch_direction(self):
+        eng, midi, cfg = make_engine()
+        eng.joystick._hat = (0, -1)  # 下
+        eng._handle_hat(cfg["gamepad"])
+        self.assertIn(("note_on", 69, 127), midi.calls)
+        eng.joystick._hat = (-1, 0)  # 左
+        eng._handle_hat(cfg["gamepad"])
+        self.assertIn(("note_off", 69), midi.calls)
+        self.assertIn(("note_on", 71, 127), midi.calls)
+
+    def test_hat_in_xy_mode_still_works(self):
+        eng, midi, cfg = make_engine()
+        cfg["gamepad"]["mode"] = "xy_absolute"
+        eng.joystick._hat = (0, 1)
+        eng._handle_hat(cfg["gamepad"])
+        self.assertTrue(any(c[0] == "note_on" for c in midi.calls))
 
 
 class TestButtonsAndTriggers(unittest.TestCase):
