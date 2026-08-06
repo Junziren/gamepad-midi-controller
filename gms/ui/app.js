@@ -4,6 +4,7 @@
 
 const state = { config: null, app: null, page: "main", learn: { active: false }, toolStates: {} };
 let seqEdit = { mode: false, sel: -1 };
+let clipEdit = null;  // {index, name, hotkey, loop, channel, events}
 
 /* ---------- API 桥 ---------- */
 function api(name, ...args) {
@@ -99,6 +100,12 @@ function textInput(value, onchange, width) {
   return inp;
 }
 
+function tdWith(control) {
+  const td = document.createElement("td");
+  td.appendChild(control);
+  return td;
+}
+
 function card(title, hint) {
   const c = el("div", "card");
   const h = el("h3", null, esc(title));
@@ -170,6 +177,20 @@ function renderMain() {
   const stopBtn = el("button", "btn small", "停止");
   stopBtn.onclick = async () => { await api("gamepad_stop"); refreshApp(); };
   row.appendChild(stopBtn);
+  const swBtn = el("button", "btn small", "切换手柄…");
+  swBtn.onclick = async () => {
+    const list = await api("gamepad_detect");
+    if (!list.length) { toast("未检测到手柄"); return; }
+    const desc = list.map((n, i) => i + ":" + n).join(" / ");
+    const v = prompt("选择手柄索引（" + desc + "）：", String(state.config.gamepad.joystick_id));
+    if (v !== null && v.trim() !== "") {
+      const ok = await api("gamepad_switch", parseInt(v, 10));
+      toast(ok ? "已切换手柄" : "切换失败");
+      refreshApp();
+    }
+  };
+  row.appendChild(swBtn);
+  row.appendChild(el("span", "muted", "ID " + state.config.gamepad.joystick_id));
   cGp.appendChild(row);
 
   const viz = el("div", "pad-viz");
@@ -295,8 +316,9 @@ function renderMain() {
   vRow.appendChild(toggleInput(vm.enabled, async v => savePatch({ virtual_midi: { enabled: v } })));
   cV.appendChild(vRow);
   const portRow = el("div", "row");
-  portRow.appendChild(field("端口名称", textInput(vm.port_name, debounce(v => savePatch({ virtual_midi: { port_name: v } }), 300), 180)));
+  portRow.appendChild(field("端口名称", textInput(vm.port_name, debounce(v => savePatch({ virtual_midi: { port_name: v } }), 400), 180)));
   cV.appendChild(portRow);
+  cV.appendChild(el("div", "small-note", "修改端口名/开关会自动重建虚拟端口（热应用）"));
   $page.appendChild(cV);
 }
 
@@ -440,13 +462,15 @@ function renderSeq() {
     playBtn.onclick = () => api("tool_action", "hotkey_clip", "play", { name: clip.name });
     const editBtn = el("button", "btn small", "编辑");
     editBtn.onclick = () => {
-      const json = prompt("Clip 事件 JSON（[{type,note,velocity,t,duration}]）：", JSON.stringify(clip.events));
-      if (json) {
-        try {
-          const events = JSON.parse(json);
-          savePatch({ tools: { hotkey_clip: { clips: t1.clips.map((q, j) => j === i ? Object.assign({}, q, { events: events }) : q) } } }, "hotkey_clip");
-        } catch (e) { toast("JSON 解析失败"); }
-      }
+      clipEdit = {
+        index: i,
+        name: clip.name,
+        hotkey: clip.hotkey || "",
+        loop: !!clip.loop,
+        channel: clip.channel,
+        events: (clip.events || []).map(e => Object.assign({}, e))
+      };
+      renderClipModal();
     };
     const delBtn = el("button", "btn small danger", "删除");
     delBtn.onclick = async () => {
@@ -483,6 +507,8 @@ function renderSeq() {
   ctrl.appendChild(field("BPM", numberInput(t2.bpm, 30, 300, debounce(v => savePatch({ tools: { step_sequencer: { bpm: v } } }), 200), 70)));
   ctrl.appendChild(field("步数", selectInput({ "8": "8", "16": "16", "32": "32" }, t2.steps, async v => savePatch({ tools: { step_sequencer: { steps: parseInt(v, 10) } } }))));
   ctrl.appendChild(field("调制", selectInput({ none: "关", note: "摇杆→音高", cc: "摇杆→CC" }, t2.modulate, async v => savePatch({ tools: { step_sequencer: { modulate: v } } }))));
+  const swingS = sliderInput(Math.round(t2.swing * 100), 0, 60, 5, v => savePatch({ tools: { step_sequencer: { swing: v / 100 } } }));
+  ctrl.appendChild(field("Swing %", swingS.holder));
   c2.appendChild(ctrl);
   const gridEl = el("div", "seq-grid");
   gridEl.id = "seq-grid";
@@ -523,6 +549,16 @@ function renderSeq() {
     dnBtn.onclick = () => savePatch({ tools: { step_sequencer: { notes: t2.notes.map((n, j) => j === s ? Math.max(0, n - 12) : n) } } });
     pRow.appendChild(upBtn);
     pRow.appendChild(dnBtn);
+    // 每步 CC 输出
+    const ccOpts = { none: "无 CC" };
+    for (let c = 1; c <= 127; c++) ccOpts[c] = "CC " + c;
+    const curCc = (t2.ccs && t2.ccs[s] != null) ? String(t2.ccs[s]) : "none";
+    const ccSel = selectInput(ccOpts, curCc, async v => {
+      const ccs = (t2.ccs || []).slice();
+      ccs[s] = v === "none" ? null : parseInt(v, 10);
+      await savePatch({ tools: { step_sequencer: { ccs: ccs } } });
+    });
+    pRow.appendChild(field("步 CC 输出", ccSel));
     panel.appendChild(pRow);
     grid.appendChild(panel);
   }
@@ -595,6 +631,100 @@ function renderMapper() {
   c.appendChild(addBtn);
   c.appendChild(el("div", "small-note", "已路由消息数：<span id='mapper-count'>0</span>"));
   $page.appendChild(c);
+}
+
+/* ===== Clip 可视化编辑器（模态） ===== */
+function renderClipModal() {
+  const oldOv = document.getElementById("clip-modal");
+  if (oldOv) oldOv.remove();
+  if (!clipEdit) return;
+  const ov = el("div", "modal-overlay");
+  ov.id = "clip-modal";
+  ov.addEventListener("click", e => { if (e.target === ov) { clipEdit = null; ov.remove(); } });
+  const m = el("div", "modal card");
+  m.appendChild(el("h3", null, "编辑 Clip：<span class='muted'>" + esc(clipEdit.name) + "</span>"));
+
+  const attr = el("div", "row wrap");
+  const nameInp = textInput(clipEdit.name, v => { clipEdit.name = v; }, 140);
+  attr.appendChild(field("名称", nameInp));
+  const hkInp = textInput(clipEdit.hotkey, v => { clipEdit.hotkey = v; }, 150);
+  hkInp.placeholder = "<ctrl>+<alt>+1";
+  attr.appendChild(field("热键", hkInp));
+  const loopRow = el("div", "row");
+  loopRow.appendChild(el("span", null, "循环"));
+  loopRow.appendChild(toggleInput(clipEdit.loop, v => { clipEdit.loop = v; }));
+  attr.appendChild(loopRow);
+  m.appendChild(attr);
+
+  const tbl = el("table", "tbl");
+  tbl.innerHTML = "<tr><th>类型</th><th>音符/CC</th><th>力度</th><th>t(ms)</th><th>时长(ms)</th><th></th></tr>";
+  clipEdit.events.forEach((ev, i) => {
+    const tr = el("tr");
+    const typeSel = selectInput(
+      { note_on: "音符开", note_off: "音符关", control_change: "CC" },
+      ev.type, v => { ev.type = v; renderClipModal(); });
+    tr.appendChild(tdWith(typeSel));
+    const isNote = ev.type === "note_on" || ev.type === "note_off";
+    const isCc = ev.type === "control_change";
+    let valInp;
+    if (isNote) {
+      valInp = numberInput(ev.note, 0, 127, v => { ev.note = v; }, 70);
+    } else if (isCc) {
+      valInp = numberInput(ev.control, 1, 127, v => { ev.control = v; }, 70);
+    } else {
+      valInp = numberInput(0, 0, 127, () => {}, 70);
+    }
+    tr.appendChild(tdWith(valInp));
+    let velInp = el("span", "muted", "—");
+    if (ev.type === "note_on") {
+      velInp = numberInput(ev.velocity, 1, 127, v => { ev.velocity = v; }, 60);
+    }
+    tr.appendChild(tdWith(velInp));
+    const tInp = numberInput(ev.t, 0, 60000, v => { ev.t = v; }, 70);
+    tr.appendChild(tdWith(tInp));
+    const dInp = numberInput(ev.duration, 0, 60000, v => { ev.duration = v; }, 70);
+    tr.appendChild(tdWith(dInp));
+    const del = el("button", "btn small danger", "删");
+    del.onclick = () => { clipEdit.events.splice(i, 1); renderClipModal(); };
+    tr.appendChild(tdWith(del));
+    tbl.appendChild(tr);
+  });
+  m.appendChild(tbl);
+
+  const addBtn = el("button", "btn small", "+ 添加事件");
+  addBtn.onclick = () => {
+    clipEdit.events.push({ type: "note_on", note: 60, velocity: 100, t: 0, duration: 120 });
+    renderClipModal();
+  };
+  m.appendChild(addBtn);
+
+  const ops = el("div", "row");
+  ops.style.marginTop = "14px";
+  const saveBtn = el("button", "btn primary", "保存");
+  saveBtn.onclick = async () => {
+    const idx = clipEdit.index;
+    const data = {
+      name: clipEdit.name || "Clip",
+      hotkey: clipEdit.hotkey,
+      loop: clipEdit.loop,
+      channel: clipEdit.channel,
+      events: clipEdit.events
+    };
+    clipEdit = null;
+    renderClipModal();
+    const clips = state.config.tools.hotkey_clip.clips.slice();
+    clips[idx] = data;
+    await savePatch({ tools: { hotkey_clip: { clips: clips } } }, "hotkey_clip");
+    renderSeq();
+    toast("Clip 已保存：" + data.name);
+  };
+  const cancelBtn = el("button", "btn", "取消");
+  cancelBtn.onclick = () => { clipEdit = null; renderClipModal(); };
+  ops.appendChild(saveBtn);
+  ops.appendChild(cancelBtn);
+  m.appendChild(ops);
+  ov.appendChild(m);
+  document.body.appendChild(ov);
 }
 
 /* ===== 设置页 ===== */

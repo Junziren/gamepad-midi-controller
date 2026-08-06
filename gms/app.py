@@ -33,6 +33,8 @@ class Api:
 
     def set_config(self, patch: dict, tool_id: str = "") -> dict:
         self.app.config.update(patch)
+        if "virtual_midi" in patch:
+            self.app.apply_virtual_midi()
         if tool_id:
             self.app.restart_tool(tool_id)
         self.app.push_state()
@@ -87,6 +89,12 @@ class Api:
 
     def gamepad_stop(self):
         self.app.gamepad.stop()
+
+    def gamepad_switch(self, joystick_id: int) -> bool:
+        """切换手柄设备（按索引），自动重连"""
+        self.app.gamepad.stop()
+        self.app.config.update({"gamepad": {"joystick_id": int(joystick_id)}})
+        return self.app.gamepad.start()
 
     # ---- MIDI Learn ----
 
@@ -211,6 +219,16 @@ class App:
         self.push_state()
 
     # ---- 工具管理 ----
+
+    def apply_virtual_midi(self):
+        """按配置重启虚拟 MIDI 端口（热应用）"""
+        vm = self.config.current()["virtual_midi"]
+        if vm.get("enabled"):
+            self.ports.start(vm.get("port_name", "Gamepad MIDI 1"))
+        else:
+            self.ports.stop()
+            self.bus.emit("virtual.state", available=self.ports.backend.is_available(),
+                          running=False, error="已停用")
 
     def set_tool_enabled(self, tool_id: str, enabled: bool):
         self.config.update({"tools": {tool_id: {"enabled": bool(enabled)}}})
