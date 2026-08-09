@@ -325,7 +325,7 @@ class App:
         # 手柄引擎常驻启动
         self.gamepad.start()
         self.start_all_enabled()
-        self.bus.emit("log", message=f"{APP_NAME} v{__version__} 已启动")
+        self.bus.emit("log", message=f"{APP_NAME} {__version__} 已启动")
 
     def shutdown(self):
         for tid in list(self.tools):
