@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 
 import webview
 
@@ -90,6 +91,10 @@ class Api:
     def gamepad_stop(self):
         self.app.gamepad.stop()
 
+    def gamepad_redetect(self) -> bool:
+        """强制重新检测：重启引擎并重建手柄句柄（蓝牙链路休眠时使用）。"""
+        return self.app.gamepad.restart()
+
     def gamepad_switch(self, joystick_id: int) -> bool:
         """切换手柄设备（按索引），自动重连"""
         self.app.gamepad.stop()
@@ -129,6 +134,7 @@ class App:
 
     def __init__(self, ui_path=None):
         self.bus = EventBus()
+        self._log_lock = threading.Lock()
         self.config = ProfileManager()
         self.config.migrate_legacy()   # 迁移旧版配置
         self.ports = MidiPortManager(self.bus)
@@ -138,6 +144,7 @@ class App:
         self.gamepad = GamepadEngine(self.bus, self.midi, self.config.current, self.learn)
         self.tools = {}
         self.logs = []
+        self._live_log_index = {}   # 实时日志 id -> self.logs 下标
         self._ui_path = ui_path
         self._window = None
         self._state_lock = threading.Lock()
@@ -147,6 +154,7 @@ class App:
 
     def _setup_bus(self):
         self.bus.subscribe("log", self._on_log)
+        self.bus.subscribe("log.update", self._on_log_update)
         self.bus.subscribe("gamepad.state", self._on_gamepad_state)
         self.bus.subscribe("virtual.state", self._on_virtual_state)
         self.bus.subscribe("sequencer.state", self._on_sequencer_state)
@@ -154,16 +162,45 @@ class App:
         self.bus.subscribe("learn.result", self._on_learn_result)
         self.bus.subscribe("midi.activity", self._on_midi_activity)
 
-    def _on_log(self, message):
+    def _on_log(self, message, log_id=None):
         self.logs.append(message)
+        if log_id:
+            self._live_log_index[log_id] = len(self.logs) - 1
         if len(self.logs) > 1000:
             self.logs = self.logs[-500:]
-        self.push_state(fragment={"log": message})
+        try:
+            with self._log_lock:
+                with open(self._log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
+        except Exception:
+            pass
+        try:
+            print(f"[GMS] {message}", flush=True)
+        except Exception:
+            pass
+        self.push_state(fragment={"log": message, "log_id": log_id})
 
-    def _on_gamepad_state(self, connected, name, axes, buttons, mode):
+    def _on_log_update(self, log_id, text):
+        """摇杆实时数值：原地编辑已有日志行，不追加新行。"""
+        idx = self._live_log_index.get(log_id)
+        if idx is not None and 0 <= idx < len(self.logs):
+            self.logs[idx] = text
+        self.push_state(fragment={"log_update": {"id": log_id, "text": text}})
+
+    @property
+    def _log_path(self):
+        import sys as _sys
+        from pathlib import Path
+        base = Path(getattr(_sys, "_MEIPASS", "") or Path(__file__).resolve().parent.parent)
+        return base / "gms.log"
+
+    def _on_gamepad_state(self, connected, name, axes, buttons, mode, running=True,
+                          layout=None, signal="ok", last_input_ago=0):
         self.push_state(fragment={
             "gamepad": {"connected": connected, "name": name, "axes": axes,
-                        "buttons": buttons, "mode": mode}})
+                        "buttons": buttons, "mode": mode, "running": running,
+                        "layout": layout or {}, "signal": signal,
+                        "last_input_ago": last_input_ago}})
 
     def _on_virtual_state(self, available, running, error):
         self.push_state(fragment={"virtual": {"available": available, "running": running,
@@ -185,9 +222,11 @@ class App:
         try:
             if kind == "note":
                 idx = result.get("index")
-                new_key = {8: "l3", 9: "r3"}.get(idx) or \
-                    {0: "button_a", 1: "button_b", 2: "button_x", 3: "button_y",
-                     4: "lb", 5: "rb", 6: "button_back", 7: "button_start"}.get(idx)
+                new_key = self.gamepad.button_key(idx) if self.gamepad.joystick is not None else None
+                if new_key is None:
+                    new_key = {8: "l3", 9: "r3"}.get(idx) or \
+                        {0: "button_a", 1: "button_b", 2: "button_x", 3: "button_y",
+                         4: "lb", 5: "rb", 6: "button_back", 7: "button_start"}.get(idx)
                 if new_key:
                     nm = dict(cfg["gamepad"]["note_mappings"])
                     note = nm.pop(target.get("key"), 60)
@@ -310,19 +349,25 @@ class App:
         }
 
     def _gamepad_state_snapshot(self) -> dict:
-        gp = self.gamepad
-        if gp.joystick is None:
-            return {"connected": False, "name": "", "axes": [], "buttons": [], "mode": ""}
         try:
-            return {"connected": True, "name": gp.joystick.get_name(),
-                    "axes": [round(gp.joystick.get_axis(i), 3) for i in range(gp.joystick.get_numaxes())],
-                    "buttons": [bool(gp.joystick.get_button(i)) for i in range(gp.joystick.get_numbuttons())],
-                    "mode": self.config.current()["gamepad"].get("mode", "relative")}
+            return self.gamepad.state_snapshot()
         except Exception:
-            return {"connected": False, "name": "", "axes": [], "buttons": [], "mode": ""}
+            return {"running": self.gamepad.running, "connected": False, "name": "",
+                    "axes": [], "buttons": [], "layout": {}, "signal": "ok",
+                    "last_input_ago": 0,
+                    "mode": self.config.current()["gamepad"].get("mode", "relative")}
 
     def tool_states(self) -> dict:
         return {tid: t.get_state() for tid, t in self.tools.items()}
+
+    def _debug_log(self, message):
+        """直接落盘调试日志（不触发 push_state，避免递归）"""
+        try:
+            with self._log_lock:
+                with open(self._log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[{time.strftime('%H:%M:%S')}] [DBG] {message}\n")
+        except Exception:
+            pass
 
     def push_state(self, fragment: dict | None = None, throttle: float = 0.05):
         """向 UI 推送状态（含节流）"""
@@ -331,12 +376,16 @@ class App:
         try:
             if fragment is not None:
                 payload = json.dumps(fragment, ensure_ascii=False)
-                self._window.evaluate_js(f"window.__pushFragment({payload})")
+                res = self._window.evaluate_js(f"window.__pushFragment({payload})")
+                if isinstance(res, str) and "Error" in res:
+                    self._debug_log(f"pushFragment JS 错误: {res[:300]}")
             else:
                 payload = json.dumps(self.app_state(), ensure_ascii=False)
-                self._window.evaluate_js(f"window.__pushState({payload})")
-        except Exception:
-            pass
+                res = self._window.evaluate_js(f"window.__pushState({payload})")
+                if isinstance(res, str) and "Error" in res:
+                    self._debug_log(f"pushState JS 错误: {res[:300]}")
+        except Exception as exc:
+            self._debug_log(f"push_state 异常: {exc}")
 
     # ---- 运行 ----
 
@@ -345,7 +394,7 @@ class App:
         ui = self._ui_path or (__file__.rsplit("\\", 1)[0] + "\\ui\\index.html")
         self._window = webview.create_window(
             APP_NAME, ui, js_api=Api(self), width=1280, height=860,
-            min_size=(1024, 700), background_color="#0d1017")
+            min_size=(1024, 700), background_color="#eae7df")
         self._window.events.loaded += self._on_loaded
         try:
             webview.start(debug=False)

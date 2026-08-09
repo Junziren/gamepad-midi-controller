@@ -33,6 +33,8 @@ class MidiEngine:
             self.bus.emit("log", message=f"消息构造失败 {msg_type}: {exc}")
             return
         if not self.ports.send_message(msg):
+            self.bus.emit("log", message=(
+                f"MIDI 发送失败: {msg_type} {fields}（虚拟端口未就绪或无输出端口）"))
             return
         self.bus.emit("midi.event", type=msg_type, channel=ch, fields=dict(fields))
         self.bus.emit("midi.activity", kind=msg_type)

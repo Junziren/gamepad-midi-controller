@@ -120,9 +120,11 @@ class TeVirtualMidiBackend(VirtualMidiBackend):
             except Exception:
                 pass
 
-    def send(self, handle, data: bytes) -> bool:
+    def send(self, handle, data) -> bool:
         if not handle or not data:
             return False
+        # mido.Message.bytes() 返回 bytearray，而 create_string_buffer 只接受 bytes
+        data = bytes(data)
         buf = ctypes.create_string_buffer(data, len(data))
         return bool(self._dll.virtualMIDISendData(handle, buf, len(data)))
 
@@ -195,10 +197,41 @@ class MidiPortManager:
 
     @staticmethod
     def output_names() -> list:
+        """枚举系统 MIDI 输出端口。
+
+        mido 的 pygame backend 把设备名硬编码为 UTF-8 解码，而 Windows
+        MMSystem 返回 ANSI(GBK) 字节：中文端口名（如 teVirtualMIDI 中文名）
+        会让 mido.get_output_names() 抛 UnicodeDecodeError。这里自行枚举并
+        按 UTF-8 -> GBK 顺序容错解码。"""
         if mido is None:
             return []
         try:
-            return list(mido.get_output_names())
+            import pygame.midi
+            pygame.midi.init()
+            try:
+                names = []
+                for i in range(pygame.midi.get_count()):
+                    info = pygame.midi.get_device_info(i)
+                    if not info:
+                        continue
+                    # get_device_info 返回 (interf, name, is_input, opened)
+                    if info[2]:
+                        continue  # 只列输出设备
+                    raw = info[1]
+                    if isinstance(raw, bytes):
+                        try:
+                            name = raw.decode("utf-8")
+                        except UnicodeDecodeError:
+                            name = raw.decode("gbk", errors="replace")
+                    else:
+                        name = str(raw)
+                    names.append(name)
+                return names
+            finally:
+                try:
+                    pygame.midi.quit()
+                except Exception:
+                    pass
         except Exception:
             return []
 

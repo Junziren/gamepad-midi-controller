@@ -33,8 +33,8 @@ DEFAULTS = {
         "curve": "linear",           # linear | exponential
         "curve_exp": 2.0,
         "invert_y": True,
-        "l3_button": 8,
-        "r3_button": 9,
+        "l3_button": -1,           # -1=自动(SDL映射/设备表)，>=0=手动指定原始按钮索引
+        "r3_button": -1,
         "xy_center_deadzone": 0.05,
         "velocity_mode": "fixed",    # fixed | hold | random
         "velocity_fixed": 127,
@@ -151,6 +151,15 @@ class ProfileManager:
 
     # ---- 内部 ----
 
+    @staticmethod
+    def _normalize(cfg: dict) -> dict:
+        """配置归一化：旧版 l3/r3 默认 8/9 改为 -1（自动识别布局）。"""
+        gp = cfg.get("gamepad")
+        if isinstance(gp, dict) and gp.get("l3_button") == 8 and gp.get("r3_button") == 9:
+            gp["l3_button"] = -1
+            gp["r3_button"] = -1
+        return cfg
+
     def _profile_path(self, name: str) -> Path:
         return self.profiles_dir / f"{name}.json"
 
@@ -179,7 +188,7 @@ class ProfileManager:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 return False
-            self._config = deep_merge(DEFAULTS, data)
+            self._config = self._normalize(deep_merge(DEFAULTS, data))
             self.current_name = name
         return True
 
@@ -216,7 +225,7 @@ class ProfileManager:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def import_profile(self, name: str, data: dict) -> bool:
-        merged = deep_merge(DEFAULTS, data)
+        merged = self._normalize(deep_merge(DEFAULTS, data))
         self._profile_path(name).write_text(
             json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
         return True

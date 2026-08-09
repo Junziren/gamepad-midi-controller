@@ -127,6 +127,7 @@ function render() {
   $page.innerHTML = "";
   (pages[state.page] || renderMain)();
   if (state.page === "play") initXYPad();
+  if (state.page === "main") drawGamepadViz((state.app && state.app.gamepad) || null);
 }
 
 function pageHead(title, sub) {
@@ -147,15 +148,32 @@ function toggleRow(labelText, checked, onchange) {
 
 function stickViz(label, idPrefix) {
   const wrap = el("div", "stick-viz");
+  const head = el("div", "stick-head");
+  head.appendChild(el("span", "stick-idx", idPrefix.toUpperCase()));
+  head.appendChild(el("span", "stick-title", esc(label)));
+  head.appendChild(el("span", "stick-sub", "AX · XY"));
+  wrap.appendChild(head);
   const cv = document.createElement("canvas");
-  cv.width = 96; cv.height = 96;
+  cv.width = 168; cv.height = 168;
   cv.id = idPrefix + "-cv";
-  const span = el("span", null, esc(label));
-  const val = el("span", "muted", "");
+  wrap.appendChild(cv);
+  const read = el("div", "stick-read");
+  const val = el("span", "axis", "X -- · Y --");
   val.id = idPrefix + "-val";
-  wrap.appendChild(cv); wrap.appendChild(span); wrap.appendChild(val);
+  const sig = el("span", "sig off", "NO SIGNAL");
+  sig.id = idPrefix + "-sig";
+  read.appendChild(val); read.appendChild(sig);
+  wrap.appendChild(read);
   return wrap;
 }
+
+/* 逻辑键 → 可视化标签（连接后按实际布局动态标注） */
+const GP_BTN_LABELS = {
+  button_a: "A", button_b: "B", button_x: "X", button_y: "Y",
+  lb: "LB", rb: "RB", button_back: "◀", button_start: "▶",
+  l3: "L3", r3: "R3", dpad_up: "↑", dpad_down: "↓",
+  dpad_left: "←", dpad_right: "→",
+};
 
 /* ===== 主控页 ===== */
 function renderMain() {
@@ -163,14 +181,23 @@ function renderMain() {
   const vm = state.config.virtual_midi;
   $page.appendChild(pageHead("主控台", "手柄 → MIDI 核心引擎"));
 
-  const cGp = card("手柄", "连接状态与实时可视化");
+  const cGp = card("手柄", "连接状态与实时可视化（支持热插拔自动重连）");
   const gp = state.app.gamepad || {};
   const row = el("div", "row");
-  row.appendChild(el("span", "badge " + (gp.connected ? "ok" : "err"), esc(gp.name || (gp.connected ? "已连接" : "未连接"))));
-  const startBtn = el("button", "btn primary small", gp.connected ? "重新检测" : "启动手柄");
+  const badge = el("span", "badge " + (gp.connected ? "ok" : (gp.running ? "warn" : "err")),
+                   esc(gp.connected ? (gp.name || "已连接") : (gp.running ? "等待手柄…" : "未连接")));
+  badge.id = "gp-badge";
+  row.appendChild(badge);
+  const sigBadge = el("span", "badge ok", "信号正常");
+  sigBadge.id = "gp-signal";
+  sigBadge.style.marginLeft = "8px";
+  if (!gp.connected) sigBadge.style.display = "none";
+  row.appendChild(sigBadge);
+  const startBtn = el("button", "btn primary small", gp.running ? "重新检测" : "启动手柄");
+  startBtn.id = "gp-start-btn";
   startBtn.onclick = async () => {
-    const ok = await api("gamepad_start");
-    if (!ok) toast("未检测到手柄，请连接后重试");
+    const ok = gp.running ? await api("gamepad_redetect") : await api("gamepad_start");
+    if (!ok) toast("手柄引擎启动失败");
     refreshApp();
   };
   row.appendChild(startBtn);
@@ -199,9 +226,20 @@ function renderMain() {
   cGp.appendChild(viz);
   const btnViz = el("div", "btn-viz");
   btnViz.style.gridTemplateColumns = "repeat(7, 1fr)";
-  [["A", 0], ["B", 1], ["X", 2], ["Y", 3], ["LB", 4], ["RB", 5],
-   ["◀", 6], ["▶", 7], ["L3", 8], ["R3", 9], ["↑", 10], ["↓", 11],
-   ["←", 12], ["→", 13]].forEach(([name, idx]) => {
+  const btnHead = el("div", "btn-head");
+  btnHead.appendChild(el("span", "stick-idx", "BTN"));
+  btnHead.appendChild(el("span", "stick-title", "按键井"));
+  btnHead.appendChild(el("span", "stick-sub", gp.layout ? "实际布局" : "默认布局"));
+  btnViz.appendChild(btnHead);
+  const gpLayout = gp.layout || null;
+  const btnDefs = gpLayout
+    ? Object.keys(gpLayout).map(i => [parseInt(i, 10), gpLayout[i]])
+        .sort((a, b) => a[0] - b[0])
+        .map(([idx, key]) => [GP_BTN_LABELS[key] || "·", idx])
+    : [["A", 0], ["B", 1], ["X", 2], ["Y", 3], ["LB", 4], ["RB", 5],
+       ["◀", 6], ["▶", 7], ["L3", 8], ["R3", 9], ["↑", 10], ["↓", 11],
+       ["←", 12], ["→", 13]];
+  btnDefs.forEach(([name, idx]) => {
     const cell = el("div", "btn-cell");
     cell.id = "bcell-" + idx;
     cell.innerHTML = "<b>" + name + "</b>";
@@ -213,11 +251,17 @@ function renderMain() {
   const cMode = card("摇杆模式", "坐标映射模式：按住 L3/R3 才映射绝对坐标，松开保持；不替代加速度模式");
   const modeRow = el("div", "row");
   modeRow.appendChild(el("span", null, "当前模式"));
+  // 下拉显示引擎实际运行的模式（引擎每帧推送 gamepad.state.mode），
+  // 避免配置已保存但引擎未生效时界面误显示。
+  const engineMode = (gp && gp.mode) || cfg.mode;
   const modeSel = selectInput(
     { relative: "加速度 / 相对模式", xy_absolute: "坐标映射模式（按住 L3/R3）" },
-    cfg.mode, async v => { await savePatch({ gamepad: { mode: v } }); render(); });
+    engineMode, async v => { await savePatch({ gamepad: { mode: v } }); render(); });
   modeRow.appendChild(modeSel);
-  modeRow.appendChild(el("span", "muted", cfg.mode === "xy_absolute" ? "按住 L3=左摇杆绝对XY，R3=右摇杆绝对XY；松开后 CC 值保持" : "摇杆归位停止改变参数值（不回中）"));
+  if ((gp && gp.mode) && gp.mode !== cfg.mode) {
+    modeRow.appendChild(el("span", "badge warn", "引擎待生效"));
+  }
+  modeRow.appendChild(el("span", "muted", engineMode === "xy_absolute" ? "按住 L3=左摇杆绝对XY，R3=右摇杆绝对XY；松开后 CC 值保持" : "摇杆归位停止改变参数值（不回中）"));
   cMode.appendChild(modeRow);
   $page.appendChild(cMode);
 
@@ -335,6 +379,15 @@ function renderMain() {
   cV.appendChild(portRow);
   cV.appendChild(el("div", "small-note", "修改端口名/内核/开关会自动重建虚拟端口（热应用）"));
   $page.appendChild(cV);
+
+  // 运行日志（与设置页共用 log-box id，实时追加）
+  const cLog = card("运行日志", "按键 / 摇杆 / 扳机触发与系统事件实时记录");
+  const logBox = el("div", "log-box");
+  logBox.id = "log-box";
+  (state.app.log || []).slice(-120).forEach(l => logBox.appendChild(el("div", null, esc(l))));
+  logBox.scrollTop = logBox.scrollHeight;
+  cLog.appendChild(logBox);
+  $page.appendChild(cLog);
 }
 
 /* ===== 演奏工具页 ===== */
@@ -368,15 +421,26 @@ function renderPlay() {
   const t2 = state.config.tools.screen_xy_pad;
   c2.appendChild(toggleRow("启用", t2.enabled, async v => api("tool_toggle", "screen_xy_pad", v)));
   const padWrap = el("div", "xy-pad-wrap");
+  const bezel = el("div", "xy-bezel");
+  bezel.appendChild(el("div", "screw tl"));
+  bezel.appendChild(el("div", "screw tr"));
+  bezel.appendChild(el("div", "screw bl"));
+  bezel.appendChild(el("div", "screw br"));
+  bezel.appendChild(el("div", "xy-plate", "XY PAD"));
   const pad = el("div", "xy-pad");
   pad.id = "xy-pad";
   pad.appendChild(el("div", "cross"));
+  pad.appendChild(el("div", "ruler-x"));
+  pad.appendChild(el("div", "ruler-y"));
   pad.appendChild(el("span", "lbl tl", "CC" + t2.cc_x + " →"));
   pad.appendChild(el("span", "lbl br", "← CC" + t2.cc_y));
+  pad.appendChild(el("span", "lbl tr", "X " + t2.cc_x));
+  pad.appendChild(el("span", "lbl bl", "Y " + t2.cc_y));
   const marker = el("div", "marker");
   marker.id = "xy-marker";
   pad.appendChild(marker);
-  padWrap.appendChild(pad);
+  bezel.appendChild(pad);
+  padWrap.appendChild(bezel);
   const pcfg = el("div", "grid");
   pcfg.appendChild(field("X → CC", numberInput(t2.cc_x, 1, 127, debounce(v => savePatch({ tools: { screen_xy_pad: { cc_x: v } } }, "screen_xy_pad"), 200))));
   pcfg.appendChild(field("Y → CC", numberInput(t2.cc_y, 1, 127, debounce(v => savePatch({ tools: { screen_xy_pad: { cc_y: v } } }, "screen_xy_pad"), 200))));
@@ -400,10 +464,18 @@ function renderPlay() {
   supRow.appendChild(toggleInput(t3.suppress, async v => savePatch({ tools: { keyboard_pads: { suppress: v } } }, "keyboard_pads")));
   krow.appendChild(supRow);
   c3.appendChild(krow);
+  const bank = el("div", "pad-bank");
+  const bankHead = el("div", "stick-head");
+  bankHead.appendChild(el("span", "stick-idx", "KBD"));
+  bankHead.appendChild(el("span", "stick-title", "KEY PADS"));
+  bankHead.appendChild(el("span", "stick-sub", "14 KEYS · " + (t3.velocity_mode === "random" ? "RANDOM VEL" : "VEL " + t3.velocity_fixed)));
+  bank.appendChild(bankHead);
   const padGrid = el("div", "seq-grid");
   padGrid.style.gridTemplateColumns = "repeat(7, 1fr)";
   t3.pads.forEach((p, i) => {
     const cell = el("div", "seq-cell");
+    cell.appendChild(el("span", "cell-led"));
+    cell.appendChild(el("span", "cell-idx", String(i + 1).padStart(2, "0")));
     cell.innerHTML = "<b>" + esc(p.key) + "</b><br>" + noteName(p.note);
     cell.title = "点击修改音符";
     cell.onclick = async () => {
@@ -422,7 +494,8 @@ function renderPlay() {
     cell.appendChild(lb);
     padGrid.appendChild(cell);
   });
-  c3.appendChild(padGrid);
+  bank.appendChild(padGrid);
+  c3.appendChild(bank);
   c3.appendChild(el("div", "small-note", "点击格子改音符；点格子右上角 L 学习键盘键（点后按任意键绑定）"));
   grid.appendChild(c3);
 
@@ -469,6 +542,7 @@ function renderSeq() {
   t1.clips.forEach((clip, i) => {
     const item = el("div", "clip-item");
     item.id = "clip-" + i;
+    item.appendChild(el("span", "clip-idx", String(i + 1).padStart(2, "0")));
     const info = el("div");
     info.appendChild(el("div", "name", esc(clip.name)));
     info.appendChild(el("div", "meta", esc(clip.hotkey || "无热键") + " · " + clip.events.length + " 事件 · " + (clip.loop ? "循环" : "单次")));
@@ -528,10 +602,18 @@ function renderSeq() {
   const gridEl = el("div", "seq-grid");
   gridEl.id = "seq-grid";
   gridEl.dataset.steps = t2.steps;
+  const seqHead = el("div", "seq-head");
+  seqHead.appendChild(el("span", "stick-idx", "SEQ"));
+  seqHead.appendChild(el("span", "stick-title", "STEP SEQUENCER"));
+  seqHead.appendChild(el("span", "stick-sub", t2.steps + " STEPS · " + t2.bpm + " BPM"));
+  seqHead.appendChild(el("span", "spacer"));
+  seqHead.appendChild(el("span", "sig", "READY"));
+  gridEl.appendChild(seqHead);
   t2.on.forEach((on, i) => {
     const cell = el("div", "seq-cell" + (on ? " on" : "") +
       (seqEdit.mode && seqEdit.sel === i ? " selected" : ""));
     cell.id = "seq-cell-" + i;
+    cell.appendChild(el("span", "cell-idx", String(i + 1).padStart(2, "0")));
     cell.innerHTML = "<b>" + noteName(t2.notes[i]) + "</b>" + (on ? "<br>" + t2.velocities[i] : "");
     cell.onclick = () => {
       if (seqEdit.mode) {
@@ -615,6 +697,7 @@ function renderMapper() {
   list.id = "rule-list";
   rules.forEach((rule, i) => {
     const rowE = el("div", "rule-row");
+    rowE.appendChild(el("span", "rule-idx", "R" + String(i + 1).padStart(2, "0")));
     rowE.appendChild(selectInput(
       { channel: "通道转发", note_shift: "音高偏移", cc_scale: "CC 缩放", note_filter: "音符过滤" },
       rule.action, async v => savePatch({ tools: { midi_mapper: { rules: rules.map((q, j) => j === i ? Object.assign({}, q, { action: v }) : q) } } }, "midi_mapper")));
@@ -812,7 +895,7 @@ async function refreshApp() {
 function updateLeds() {
   const gp = state.app.gamepad || {};
   const ledGp = document.getElementById("led-gamepad");
-  if (ledGp) ledGp.className = "led " + (gp.connected ? "on" : "off");
+  if (ledGp) ledGp.className = "led " + (gp.connected ? "on" : (gp.running ? "warn" : "off"));
   const vp = state.app.ports || {};
   const ledV = document.getElementById("led-virtual");
   if (ledV) ledV.className = "led " + (vp.virtual_running ? "on" : vp.virtual_available ? "warn" : "off");
@@ -824,10 +907,26 @@ function updateLeds() {
 
 /* 后端推送片段 */
 window.__pushFragment = function (f) {
+  if (f.log_update) {
+    const box = document.getElementById("log-box");
+    if (box) {
+      let d = box.querySelector('[data-log-id="' + esc(f.log_update.id) + '"]');
+      if (!d) {
+        d = el("div", null, "");
+        d.setAttribute("data-log-id", esc(f.log_update.id));
+        box.appendChild(d);
+      }
+      d.textContent = f.log_update.text;
+      while (box.children.length > 200) box.removeChild(box.firstChild);
+      box.scrollTop = box.scrollHeight;
+    }
+    return;
+  }
   if (f.log) {
     const box = document.getElementById("log-box");
     if (box) {
       const d = el("div", null, esc(f.log));
+      if (f.log_id) d.setAttribute("data-log-id", esc(f.log_id));
       box.appendChild(d);
       while (box.children.length > 200) box.removeChild(box.firstChild);
       box.scrollTop = box.scrollHeight;
@@ -838,6 +937,7 @@ window.__pushFragment = function (f) {
     state.app = state.app || {};
     state.app.gamepad = Object.assign({}, state.app.gamepad || {}, f.gamepad);
     drawGamepadViz(f.gamepad);
+    updateGamepadCard();
     updateLeds();
     return;
   }
@@ -857,6 +957,8 @@ window.__pushFragment = function (f) {
       }
       const btn = document.getElementById("seq-play-btn");
       if (btn) btn.textContent = f.sequencer.playing ? "播放中…" : "▶ 播放";
+      const sg = gridEl.querySelector(".seq-head .sig");
+      if (sg) { sg.textContent = f.sequencer.playing ? "RUN" : "READY"; sg.className = "sig" + (f.sequencer.playing ? " on" : ""); }
     }
     return;
   }
@@ -864,6 +966,8 @@ window.__pushFragment = function (f) {
     state.learn = f.learn;
     const banner = document.getElementById("learn-banner");
     if (banner) banner.classList.toggle("hidden", !f.learn.active);
+    const cancelBtn = document.getElementById("learn-cancel-btn");
+    if (cancelBtn) cancelBtn.onclick = () => api("learn_cancel");
     return;
   }
   if (f.midi_activity) {
@@ -886,37 +990,371 @@ window.__pushState = async function (s) {
   render();
 };
 
+/* ---- 摇杆显示井（FAD Paper：机械仪表 / 精密刻度 / 硬边咬花） ---- */
+const STICK_WELL = { size: 168, cx: 84, cy: 84, range: 50 };
+
+function drawStickBase(ctx) {
+  const s = STICK_WELL, w = s.size, h = s.size, cx = s.cx, cy = s.cy, r = s.range;
+
+  // 井底：深色屏幕 + 扫描线纹理
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#1C1B14";
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(0,0,0,.18)";
+  for (let y = 1; y < h; y += 3) ctx.fillRect(0, y, w, 1);
+
+  // 基准网格（12px 细格 / 24px 粗格）
+  ctx.lineWidth = 1;
+  for (let gx = 12; gx < w; gx += 12) {
+    ctx.strokeStyle = (gx % 24 === 0) ? "rgba(228,225,212,.16)" : "rgba(228,225,212,.07)";
+    ctx.beginPath(); ctx.moveTo(gx + .5, 0); ctx.lineTo(gx + .5, h); ctx.stroke();
+  }
+  for (let gy = 12; gy < h; gy += 12) {
+    ctx.strokeStyle = (gy % 24 === 0) ? "rgba(228,225,212,.16)" : "rgba(228,225,212,.07)";
+    ctx.beginPath(); ctx.moveTo(0, gy + .5); ctx.lineTo(w, gy + .5); ctx.stroke();
+  }
+
+  // 主轴 + 端点箭头（轴向基准）
+  ctx.strokeStyle = "rgba(228,225,212,.38)";
+  ctx.beginPath(); ctx.moveTo(cx + .5, 4); ctx.lineTo(cx + .5, h - 4); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4, cy + .5); ctx.lineTo(w - 4, cy + .5); ctx.stroke();
+  ctx.fillStyle = "rgba(228,225,212,.55)";
+  const arrow = (x, y, dx, dy) => {
+    ctx.beginPath();
+    ctx.moveTo(x + .5, y + .5);
+    ctx.lineTo(x - dx * 4 + dy * 3 + .5, y - dy * 4 + dx * 3 + .5);
+    ctx.lineTo(x - dx * 4 - dy * 3 + .5, y - dy * 4 - dx * 3 + .5);
+    ctx.closePath(); ctx.fill();
+  };
+  arrow(cx, 6, 0, -1); arrow(cx, h - 7, 0, 1);
+  arrow(6, cy, -1, 0); arrow(w - 7, cy, 1, 0);
+
+  // 行程标尺：25% / 50% / 75%（垂直轴横刻、水平轴竖刻）
+  ctx.strokeStyle = "rgba(228,225,212,.30)";
+  [0.25, 0.5, 0.75].forEach(t => {
+    const d = r * t;
+    ctx.beginPath(); ctx.moveTo(cx - 2.5, cy - d + .5); ctx.lineTo(cx + 2.5, cy - d + .5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - 2.5, cy + d + .5); ctx.lineTo(cx + 2.5, cy + d + .5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - d + .5, cy - 2.5); ctx.lineTo(cx - d + .5, cy + 2.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx + d + .5, cy - 2.5); ctx.lineTo(cx + d + .5, cy + 2.5); ctx.stroke();
+  });
+
+  // 行程极限校准牌：±1（行程圆外的深色小牌）
+  const tag = (tx, ty, txt) => {
+    ctx.font = "700 6px Consolas, monospace";
+    const tw = ctx.measureText(txt).width + 5, th = 8;
+    ctx.fillStyle = "#14130D";
+    ctx.fillRect(tx - tw / 2, ty - th / 2, tw, th);
+    ctx.strokeStyle = "rgba(228,225,212,.65)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tx - tw / 2 + .5, ty - th / 2 + .5, tw, th);
+    ctx.fillStyle = "rgba(228,225,212,.85)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(txt, tx, ty + .5);
+  };
+  tag(cx, cy - r - 8, "+1");
+  tag(cx, cy + r + 8, "-1");
+  tag(cx - r - 10, cy, "-1");
+  tag(cx + r + 10, cy, "+1");
+
+  // 中心基准：倒角环 + “0” 标
+  ctx.strokeStyle = "rgba(228,225,212,.60)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(cx - 5 + .5, cy - 5 + .5, 10, 10);
+  ctx.fillStyle = "rgba(228,225,212,.80)";
+  ctx.font = "700 6px Consolas, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("0", cx, cy + .5);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.lineWidth = 1;
+
+  // 行程圆（双重硬线）+ 行程虚线方框
+  ctx.strokeStyle = "rgba(0,0,0,.95)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, r + 1.5, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = "rgba(228,225,212,.90)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "rgba(228,225,212,.35)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - r + .5, cy - r + .5, r * 2, r * 2);
+  ctx.setLineDash([]);
+
+  // 咬花环：行程圆与刻度环之间的 45° 斜纹带
+  const rh0 = r + 3.5, rh1 = r + 14;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, rh1, 0, Math.PI * 2);
+  ctx.arc(cx, cy, rh0, 0, Math.PI * 2, true);
+  ctx.clip();
+  ctx.strokeStyle = "rgba(228,225,212,.22)";
+  for (let d = -h; d < w; d += 5) {
+    ctx.beginPath(); ctx.moveTo(d, 0); ctx.lineTo(d + h, h); ctx.stroke();
+  }
+  ctx.restore();
+
+  // 刻度环带：外圈仪表刻度环（15° 一格，45° 加长，90° 方位为 accent）
+  const rt0 = r + 15, rt1 = r + 26;
+  ctx.beginPath();
+  ctx.arc(cx, cy, rt1, 0, Math.PI * 2);
+  ctx.arc(cx, cy, rt0, 0, Math.PI * 2, true);
+  ctx.fillStyle = "#26241C";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(228,225,212,.80)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(cx, cy, rt1 - .5, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = "rgba(0,0,0,.95)";
+  ctx.beginPath(); ctx.arc(cx, cy, rt0 + .5, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = 1;
+  for (let a = 0; a < 360; a += 15) {
+    const rad = a * Math.PI / 180;
+    const ca = Math.cos(rad), sa = Math.sin(rad);
+    const cardinal = a % 90 === 0;
+    const major = a % 45 === 0;
+    const len = cardinal ? 9 : major ? 6.5 : 4;
+    const x0 = cx + ca * (rt0 + 2), y0 = cy + sa * (rt0 + 2);
+    ctx.strokeStyle = cardinal ? "rgba(122,156,255,.95)" : major ? "rgba(228,225,212,.80)" : "rgba(228,225,212,.40)";
+    ctx.lineWidth = cardinal ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + ca * len, y0 + sa * len); ctx.stroke();
+  }
+  ctx.lineWidth = 1;
+
+  // 方位丝印：刻在刻度环上的轴向标签
+  const ringMid = rt0 + (rt1 - rt0) / 2;
+  ctx.fillStyle = "rgba(228,225,212,.92)";
+  ctx.font = "700 7px Consolas, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Y+", cx, cy - ringMid);
+  ctx.fillText("Y−", cx, cy + ringMid);
+  ctx.fillText("X−", cx - ringMid, cy);
+  ctx.fillText("X+", cx + ringMid, cy);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+
+  // 外壳：双层硬边框 + 四角铆钉
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(228,225,212,.90)";
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(0,0,0,.90)";
+  ctx.strokeRect(4.5, 4.5, w - 9, h - 9);
+  const screw = (sx, sy) => {
+    ctx.fillStyle = "rgba(228,225,212,.85)";
+    ctx.fillRect(sx, sy, 4, 4);
+    ctx.strokeStyle = "rgba(0,0,0,.90)";
+    ctx.strokeRect(sx + .5, sy + .5, 4, 4);
+    ctx.strokeStyle = "rgba(0,0,0,.75)";
+    ctx.beginPath(); ctx.moveTo(sx, sy + 4); ctx.lineTo(sx + 4, sy); ctx.stroke();
+  };
+  screw(7, 7); screw(w - 11, 7); screw(7, h - 11); screw(w - 11, h - 11);
+}
+
+/* 摇杆指示器：机械指针（杆身 + 双色针头 + 轴心帽 + 数值芯片） */
+function drawStickCursor(ctx, ax, ay) {
+  const s = STICK_WELL;
+  const px = s.cx + Math.max(-1, Math.min(1, ax)) * s.range;
+  const py = s.cy + Math.max(-1, Math.min(1, ay)) * s.range;
+  const dx = px - s.cx, dy = py - s.cy;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+
+  // 全幅准线（X/Y 交叉）
+  ctx.strokeStyle = "rgba(122,156,255,.22)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px + .5, 0); ctx.lineTo(px + .5, s.size); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, py + .5); ctx.lineTo(s.size, py + .5); ctx.stroke();
+
+  // 杆身：深色外描边 + accent 内芯（从轴心指向针头）
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = "rgba(0,0,0,.95)";
+  ctx.beginPath(); ctx.moveTo(s.cx + .5, s.cy + .5); ctx.lineTo(px - ux * 7 + .5, py - uy * 7 + .5); ctx.stroke();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "#7A9CFF";
+  ctx.beginPath(); ctx.moveTo(s.cx + .5, s.cy + .5); ctx.lineTo(px - ux * 7 + .5, py - uy * 7 + .5); ctx.stroke();
+
+  // 方向针尖（沿杆身方向的三角，中心点时省略）
+  if (len > 1) {
+    ctx.fillStyle = "#E4E1D4";
+    ctx.beginPath();
+    ctx.moveTo(px + ux * 9 + .5, py + uy * 9 + .5);
+    ctx.lineTo(px + ux * 4 - uy * 4.5 + .5, py + uy * 4 + ux * 4.5 + .5);
+    ctx.lineTo(px + ux * 4 + uy * 4.5 + .5, py + uy * 4 - ux * 4.5 + .5);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,.80)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // 针头：硬边方块（accent 填充 + 纸面描边 + 墨槽十字）
+  const half = 6.5;
+  ctx.fillStyle = "#7A9CFF";
+  ctx.fillRect(px - half, py - half, half * 2, half * 2);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#E4E1D4";
+  ctx.strokeRect(px - half + .5, py - half + .5, half * 2, half * 2);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(28,27,20,.60)";
+  ctx.beginPath(); ctx.moveTo(px + .5, py - half + 2); ctx.lineTo(px + .5, py + half - 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(px - half + 2, py + .5); ctx.lineTo(px + half - 2, py + .5); ctx.stroke();
+  ctx.fillStyle = "#1C1B14";
+  ctx.fillRect(px - 1, py - 1, 2, 2);
+
+  // 四角瞄准线
+  ctx.strokeStyle = "rgba(228,225,212,.75)";
+  const arm = 4;
+  [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([ddx, ddy]) => {
+    ctx.beginPath();
+    ctx.moveTo(px + ddx * (half + 1) + .5, py + ddy * (half + 1) + .5);
+    ctx.lineTo(px + ddx * (half + arm + 1) + .5, py + ddy * (half + arm + 1) + .5);
+    ctx.stroke();
+  });
+
+  // 轴心帽（中心：硬边帽 + accent 十字）
+  const cap = 5;
+  ctx.fillStyle = "#26241C";
+  ctx.fillRect(s.cx - cap, s.cy - cap, cap * 2, cap * 2);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#E4E1D4";
+  ctx.strokeRect(s.cx - cap + .5, s.cy - cap + .5, cap * 2, cap * 2);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#7A9CFF";
+  ctx.beginPath(); ctx.moveTo(s.cx - cap + 2, s.cy + .5); ctx.lineTo(s.cx + cap - 2, s.cy + .5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(s.cx + .5, s.cy - cap + 2); ctx.lineTo(s.cx + .5, s.cy + cap - 2); ctx.stroke();
+
+  // 实时数值芯片（纸面反白，防出界自动翻转）
+  const chipTxt = fmtAxis(ax) + " / " + fmtAxis(ay);
+  ctx.font = "7px Consolas, monospace";
+  const cw = ctx.measureText(chipTxt).width + 10, chh = 11;
+  let cx0 = px + 11, cy0 = py - chh - 8;
+  if (cx0 + cw > s.size - 3) cx0 = px - cw - 11;
+  if (cy0 < 3) cy0 = py + 11;
+  ctx.fillStyle = "#E4E1D4";
+  ctx.fillRect(cx0, cy0, cw, chh);
+  ctx.strokeStyle = "rgba(0,0,0,.85)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx0 + .5, cy0 + .5, cw, chh);
+  ctx.fillStyle = "#7A9CFF";
+  ctx.fillRect(cx0 + 2, cy0 + 3, 3, chh - 6);
+  ctx.fillStyle = "#26251F";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(chipTxt, cx0 + 8, cy0 + chh / 2 + .5);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function fmtAxis(v) {
+  const n = Math.round((v || 0) * 100) / 100;
+  return (n >= 0 ? "+" : "") + n.toFixed(2);
+}
+
 /* 手柄可视化 */
 function drawGamepadViz(gp) {
-  if (!gp || !gp.axes) return;
-  const draw = (cvId, xIdx, yIdx, valId) => {
+  const connected = !!(gp && gp.connected && gp.axes);
+  const draw = (cvId, xIdx, yIdx, valId, sigId) => {
     const cv = document.getElementById(cvId);
     if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const log = STICK_WELL.size;
+    if (cv.width !== Math.round(log * dpr)) { cv.width = Math.round(log * dpr); cv.height = Math.round(log * dpr); }
     const ctx = cv.getContext("2d");
-    ctx.clearRect(0, 0, 96, 96);
-    ctx.strokeStyle = "rgba(255,255,255,.15)";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(48, 4); ctx.lineTo(48, 92); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(4, 48); ctx.lineTo(92, 48); ctx.stroke();
-    const x = (gp.axes[xIdx] || 0) * 36;
-    const y = (gp.axes[yIdx] || 0) * 36;
-    ctx.beginPath(); ctx.arc(48 + x, 48 + y, 8, 0, Math.PI * 2);
-    ctx.fillStyle = "#6ee7ff";
-    ctx.shadowColor = "#6ee7ff";
-    ctx.shadowBlur = 10;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    if (valId) {
-      const val = document.getElementById(valId);
-      if (val) val.textContent = (Math.round(x * 10) / 10) + ", " + (Math.round(y * 10) / 10);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawStickBase(ctx);
+    const val = document.getElementById(valId);
+    const sig = document.getElementById(sigId);
+    if (!connected) {
+      // 无信号：待机屏（压暗 + 基准残留 + STANDBY 丝印）
+      const s = STICK_WELL, r = s.range;
+      ctx.fillStyle = "rgba(28,27,20,.55)";
+      ctx.fillRect(0, 0, s.size, s.size);
+      ctx.strokeStyle = "rgba(228,225,212,.30)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath(); ctx.moveTo(s.cx + .5, 0); ctx.lineTo(s.cx + .5, s.size); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, s.cy + .5); ctx.lineTo(s.size, s.cy + .5); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(228,225,212,.45)";
+      [[s.cx - r, s.cy - r], [s.cx + r, s.cy - r], [s.cx - r, s.cy + r], [s.cx + r, s.cy + r]].forEach(([qx, qy]) => {
+        ctx.fillRect(qx - 1, qy - 1, 2, 2);
+      });
+      ctx.strokeStyle = "rgba(228,225,212,.50)";
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.arc(s.cx, s.cy, 17, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(228,225,212,.92)";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      ctx.font = "700 10px Consolas, monospace";
+      ctx.fillText("STANDBY▮", s.cx, s.cy - 26);
+      ctx.font = "600 6px Consolas, monospace";
+      ctx.fillStyle = "rgba(228,225,212,.55)";
+      ctx.fillText("AXIS OFFLINE", s.cx, s.cy + 16);
+      ctx.textAlign = "left";
+      ctx.strokeStyle = "rgba(228,225,212,.45)";
+      ctx.lineWidth = 1.5;
+      const d = 8;
+      ctx.beginPath();
+      ctx.moveTo(s.cx + .5, s.cy - d); ctx.lineTo(s.cx + d, s.cy + .5);
+      ctx.lineTo(s.cx + .5, s.cy + d); ctx.lineTo(s.cx - d, s.cy + .5);
+      ctx.closePath(); ctx.stroke();
+      ctx.lineWidth = 1;
+      if (val) val.textContent = "X -- · Y --";
+      if (sig) { sig.textContent = "STANDBY"; sig.className = "sig off"; }
+      return;
     }
+    drawStickCursor(ctx, gp.axes[xIdx] || 0, gp.axes[yIdx] || 0);
+    if (val) val.textContent = "X " + fmtAxis(gp.axes[xIdx]) + " · Y " + fmtAxis(gp.axes[yIdx]);
+    if (sig) { sig.textContent = "SIG OK"; sig.className = "sig on"; }
   };
-  draw("lsL-cv", 0, 1, "lsL-val");
-  draw("lsR-cv", 2, 3, "lsR-val");
+
+  draw("lsL-cv", 0, 1, "lsL-val", "lsL-sig");
+  draw("lsR-cv", 2, 3, "lsR-val", "lsR-sig");
   (gp.buttons || []).forEach((pressed, i) => {
     const cell = document.getElementById("bcell-" + i);
     if (cell) cell.classList.toggle("pressed", pressed);
   });
+  if (gp.layout) {
+    Object.keys(gp.layout).forEach(i => {
+      const cell = document.getElementById("bcell-" + i);
+      if (cell) cell.innerHTML = "<b>" + (GP_BTN_LABELS[gp.layout[i]] || "·") + "</b>";
+    });
+  }
+}
+
+
+/* 手柄卡片实时刷新（热插拔时徽章/按钮即时更新） */
+function updateGamepadCard() {
+  const gp = (state.app && state.app.gamepad) || {};
+  const badge = document.getElementById("gp-badge");
+  if (badge) {
+    badge.className = "badge " + (gp.connected ? "ok" : (gp.running ? "warn" : "err"));
+    badge.textContent = gp.connected ? (gp.name || "已连接") : (gp.running ? "等待手柄…" : "未连接");
+  }
+  const btn = document.getElementById("gp-start-btn");
+  if (btn) btn.textContent = gp.running ? "重新检测" : "启动手柄";
+  const sig = document.getElementById("gp-signal");
+  if (sig) {
+    if (!gp.connected) {
+      sig.style.display = "none";
+    } else {
+      sig.style.display = "";
+      if (gp.signal === "reconnecting") {
+        sig.className = "badge warn";
+        sig.textContent = "重连中…";
+      } else if (gp.signal === "no_signal") {
+        sig.className = "badge err";
+        sig.textContent = "⚠ 无输入信号（手柄已连接但未收到数据）";
+      } else {
+        sig.className = "badge ok";
+        sig.textContent = "信号正常";
+      }
+    }
+  }
 }
 
 /* XY Pad 交互 */
