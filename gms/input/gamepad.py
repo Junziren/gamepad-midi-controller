@@ -2,7 +2,9 @@
 """手柄引擎：热插拔自动重连 + SDL 布局感知按钮/轴映射 + 相对/坐标映射模式"""
 
 import ctypes
+import ctypes.util
 import os
+import sys
 import threading
 import time
 
@@ -479,14 +481,26 @@ class GamepadEngine:
     def _sdl_mapping(self, guid_hex: str):
         """查询 pygame 捆绑 SDL2 的控制器映射表；返回 {buttons, axes} 或 None。"""
         try:
-            sdl_path = os.path.join(os.path.dirname(pygame.__file__), "SDL2.dll")
-            if not os.path.exists(sdl_path):
-                return None
+            base = os.path.dirname(pygame.__file__)
+            if sys.platform == "win32":
+                names = ("SDL2.dll",)
+            elif sys.platform == "darwin":
+                names = ("libSDL2-2.0.0.dylib", "libSDL2.dylib", "SDL2")
+            else:
+                names = ("libSDL2-2.0.so.0", "libSDL2.so", "SDL2")
+            sdl_path = next((os.path.join(base, name) for name in names
+                             if os.path.exists(os.path.join(base, name))), None)
+            if sdl_path:
+                sdl = ctypes.CDLL(sdl_path)
+            else:
+                library = ctypes.util.find_library("SDL2")
+                if not library:
+                    return None
+                sdl = ctypes.CDLL(library)
 
             class _G(ctypes.Structure):
                 _fields_ = [("data", ctypes.c_ubyte * 16)]
 
-            sdl = ctypes.CDLL(sdl_path)
             sdl.SDL_GameControllerMappingForGUID.restype = ctypes.c_char_p
             sdl.SDL_GameControllerMappingForGUID.argtypes = [_G]
             g = _G()
@@ -608,12 +622,16 @@ class GamepadEngine:
         l3_down = self._button_down(l3)
         r3_down = self._button_down(r3)
 
-        if l3_down and mappings.get("left_stick_x") is not None:
-            self._abs_axis(mappings["left_stick_x"], axes[0], dz)
-            self._abs_axis(mappings["left_stick_y"], axes[1], dz)
-        if r3_down and mappings.get("right_stick_x") is not None:
-            self._abs_axis(mappings["right_stick_x"], axes[2], dz)
-            self._abs_axis(mappings["right_stick_y"], axes[3], dz)
+        if l3_down:
+            for axis_value, key in zip(axes[:2], ("left_stick_x", "left_stick_y")):
+                cc_num = mappings.get(key)
+                if cc_num is not None:
+                    self._abs_axis(cc_num, axis_value, dz)
+        if r3_down:
+            for axis_value, key in zip(axes[2:], ("right_stick_x", "right_stick_y")):
+                cc_num = mappings.get(key)
+                if cc_num is not None:
+                    self._abs_axis(cc_num, axis_value, dz)
         # 松开时：停止更新，CC 值保持（不做任何发送）
 
     def _abs_axis(self, cc_num, axis_value, dz):
@@ -626,8 +644,28 @@ class GamepadEngine:
 
     def _button_down(self, idx) -> bool:
         f = self._frame_or_live()
-        buttons = f["buttons"]
+        return self._button_down_in_frame(f, idx)
+
+    @staticmethod
+    def _button_down_in_frame(frame, idx) -> bool:
+        buttons = frame.get("buttons", [])
         return 0 <= idx < len(buttons) and bool(buttons[idx])
+
+    def _xy_active(self, cfg, frame=None) -> dict:
+        """Return which sticks are currently authorized for absolute mapping.
+
+        The raw frame remains available to the MIDI engine.  This separate
+        state is also used by the UI so an unheld stick cannot appear to move.
+        Relative mode has no gate, so both sticks are considered active.
+        """
+        if cfg.get("mode", "relative") != "xy_absolute":
+            return {"left": True, "right": True}
+        frame = frame or self._frame_or_live()
+        l3, r3 = self._l3_r3(cfg)
+        return {
+            "left": self._button_down_in_frame(frame, l3),
+            "right": self._button_down_in_frame(frame, r3),
+        }
 
     # ---- 扳机 ----
 
@@ -794,9 +832,19 @@ class GamepadEngine:
                 "connected": False, "name": "", "axes": [], "buttons": [],
                 "mode": cfg.get("mode", "relative"), "running": self.running,
                 "layout": {}, "signal": "ok", "last_input_ago": 0,
+                "xy_active": {"left": False, "right": False},
             }
         f = self._frame_or_live()
-        axes = [round(v, 3) for v in f["axes"]]
+        raw_axes = list(f["axes"])
+        xy_active = self._xy_active(cfg, f)
+        if cfg.get("mode", "relative") == "xy_absolute":
+            # Never leak an unheld stick's physical movement to the UI.  The
+            # MIDI path still reads the original frame in _handle_xy_absolute.
+            raw_axes[0] = raw_axes[0] if xy_active["left"] and len(raw_axes) > 0 else 0.0
+            raw_axes[1] = raw_axes[1] if xy_active["left"] and len(raw_axes) > 1 else 0.0
+            raw_axes[2] = raw_axes[2] if xy_active["right"] and len(raw_axes) > 2 else 0.0
+            raw_axes[3] = raw_axes[3] if xy_active["right"] and len(raw_axes) > 3 else 0.0
+        axes = [round(v, 3) for v in raw_axes]
         buttons = list(f["buttons"])
         dpad_base = max(10, len(buttons))
         buttons += [False] * (dpad_base + 4 - len(buttons))
@@ -818,6 +866,7 @@ class GamepadEngine:
             "layout": layout,
             "signal": self.signal,
             "last_input_ago": round(time.time() - self._last_joy_event, 1),
+            "xy_active": xy_active,
         }
 
     def _push_state(self):

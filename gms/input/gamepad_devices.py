@@ -11,13 +11,19 @@ from __future__ import annotations
 import threading
 import time
 import ctypes
+import sys
 
 import pygame
 
-try:
-    from pywinusb import hid
-    from pywinusb.hid.core import HidP_Input, ReportItem
-except Exception:
+if sys.platform == "win32":
+    try:
+        from pywinusb import hid
+        from pywinusb.hid.core import HidP_Input, ReportItem
+    except Exception:
+        hid = None
+        HidP_Input = 0
+        ReportItem = None
+else:
     hid = None
     HidP_Input = 0
     ReportItem = None

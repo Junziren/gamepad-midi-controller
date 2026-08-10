@@ -28,6 +28,8 @@ LOOPBACK_MANAGER_ACTIVATABLE = "Microsoft.Windows.Devices.Midi2.MidiLoopbackEndp
 
 def _midisrv_running() -> bool:
     """检查 Windows MIDI 服务 (midisrv) 是否运行"""
+    if sys.platform != "win32":
+        return False
     try:
         SC_MANAGER_CONNECT = 0x0001
         SERVICE_QUERY_STATUS = 0x0004
@@ -66,6 +68,8 @@ def _midisrv_running() -> bool:
 
 def _midi2_runtime_registered() -> bool:
     """检查系统是否注册了 MIDI2 WinRT 激活类（SDK 运行时已安装）"""
+    if sys.platform != "win32":
+        return False
     import winreg
     try:
         with winreg.OpenKey(
@@ -99,6 +103,9 @@ class WindowsMidiServicesBackend(VirtualMidiBackend):
     # ---- 检测 ----
 
     def _check(self):
+        if sys.platform != "win32":
+            self._err = "Windows MIDI Services 仅支持 Windows"
+            return
         if not _midisrv_running():
             self._err = "Windows MIDI 服务 (midisrv) 未运行"
             return

@@ -261,7 +261,7 @@ function renderMain() {
   if ((gp && gp.mode) && gp.mode !== cfg.mode) {
     modeRow.appendChild(el("span", "badge warn", "引擎待生效"));
   }
-  modeRow.appendChild(el("span", "muted", engineMode === "xy_absolute" ? "按住 L3=左摇杆绝对XY，R3=右摇杆绝对XY；松开后 CC 值保持" : "摇杆归位停止改变参数值（不回中）"));
+  modeRow.appendChild(el("span", "muted", engineMode === "xy_absolute" ? "按住 L3=左摇杆绝对XY，R3=右摇杆绝对XY；松开后 CC 保持，画面锁定" : "摇杆归位停止改变参数值（不回中）"));
   cMode.appendChild(modeRow);
   $page.appendChild(cMode);
 
@@ -1253,9 +1253,32 @@ function fmtAxis(v) {
   return (n >= 0 ? "+" : "") + n.toFixed(2);
 }
 
+function drawStickGate(ctx, label) {
+  const s = STICK_WELL;
+  ctx.save();
+  ctx.fillStyle = "rgba(28,27,20,.34)";
+  ctx.fillRect(0, 0, s.size, s.size);
+  ctx.strokeStyle = "rgba(228,225,212,.48)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 4]);
+  ctx.beginPath();
+  ctx.arc(s.cx, s.cy, 16, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(228,225,212,.92)";
+  ctx.font = "700 9px Consolas, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, s.cx, s.cy - 18);
+  ctx.fillStyle = "rgba(228,225,212,.52)";
+  ctx.font = "600 6px Consolas, monospace";
+  ctx.fillText("AXIS GATED", s.cx, s.cy + 18);
+  ctx.restore();
+}
+
 /* 手柄可视化 */
 function drawGamepadViz(gp) {
-  const connected = !!(gp && gp.connected && gp.axes);
+  const connected = !!(gp && gp.connected && Array.isArray(gp.axes));
   const draw = (cvId, xIdx, yIdx, valId, sigId) => {
     const cv = document.getElementById(cvId);
     if (!cv) return;
@@ -1307,9 +1330,24 @@ function drawGamepadViz(gp) {
       if (sig) { sig.textContent = "STANDBY"; sig.className = "sig off"; }
       return;
     }
+    const absoluteMode = gp.mode === "xy_absolute";
+    const side = xIdx < 2 ? "left" : "right";
+    const active = !absoluteMode || !!(gp.xy_active && gp.xy_active[side]);
+    if (!active) {
+      drawStickGate(ctx, side === "left" ? "HOLD L3" : "HOLD R3");
+      if (val) val.textContent = "X -- · Y --";
+      if (sig) {
+        sig.textContent = side === "left" ? "L3 OFF" : "R3 OFF";
+        sig.className = "sig off";
+      }
+      return;
+    }
     drawStickCursor(ctx, gp.axes[xIdx] || 0, gp.axes[yIdx] || 0);
     if (val) val.textContent = "X " + fmtAxis(gp.axes[xIdx]) + " · Y " + fmtAxis(gp.axes[yIdx]);
-    if (sig) { sig.textContent = "SIG OK"; sig.className = "sig on"; }
+    if (sig) {
+      sig.textContent = absoluteMode ? (side === "left" ? "L3 HELD" : "R3 HELD") : "SIG OK";
+      sig.className = "sig on";
+    }
   };
 
   draw("lsL-cv", 0, 1, "lsL-val", "lsL-sig");

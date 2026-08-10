@@ -9,6 +9,7 @@ python -m pip install pyinstaller
 
 python -m PyInstaller --noconfirm --clean --onedir --noconsole ^
   --name GamepadMIDIStudio ^
+  --icon "assets\icon.ico" ^
   --add-data "gms\ui;gms\ui" ^
   run.py
 

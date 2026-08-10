@@ -2,7 +2,7 @@
 
 import threading
 import ctypes
-from ctypes import wintypes
+import sys
 
 from pynput import keyboard, mouse
 
@@ -42,12 +42,16 @@ class GlobalHooks:
     def start(self):
         if self._kb is not None:
             return
-        self._kb = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
-        self._ms = mouse.Listener(on_scroll=self._on_scroll)
-        self._kb.daemon = True
-        self._ms.daemon = True
-        self._kb.start()
-        self._ms.start()
+        try:
+            self._kb = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+            self._ms = mouse.Listener(on_scroll=self._on_scroll)
+            self._kb.daemon = True
+            self._ms.daemon = True
+            self._kb.start()
+            self._ms.start()
+        except Exception as exc:
+            self.stop()
+            self.bus.emit("log", message=f"全局输入钩子不可用：{exc}")
 
     def stop(self):
         if self._kb:
@@ -125,11 +129,41 @@ class GlobalHooks:
 
 def get_cursor_pos():
     """全局鼠标位置 (x, y)，用 GetCursorPos 轮询，比监听事件轻"""
-    pt = wintypes.POINT()
-    if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
-        return pt.x, pt.y
+    if sys.platform == "win32":
+        from ctypes import wintypes
+        pt = wintypes.POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+            return pt.x, pt.y
+        return 0, 0
+    try:
+        x, y = mouse.Controller().position
+        return int(round(x)), int(round(y))
+    except Exception:
+        pass
     return 0, 0
 
 
 def get_screen_size():
-    return ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
+    if sys.platform == "win32":
+        return ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSScreen
+            frame = NSScreen.mainScreen().frame()
+            return int(frame.size.width), int(frame.size.height)
+        except Exception:
+            try:
+                from Quartz import CGDisplayBounds, CGMainDisplayID
+                bounds = CGDisplayBounds(CGMainDisplayID())
+                return int(bounds.size.width), int(bounds.size.height)
+            except Exception:
+                pass
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        size = (root.winfo_screenwidth(), root.winfo_screenheight())
+        root.destroy()
+        return size
+    except Exception:
+        return 1, 1

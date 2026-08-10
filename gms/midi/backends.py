@@ -65,6 +65,9 @@ class TeVirtualMidiBackend(VirtualMidiBackend):
         self._dll = None
         self._err = ""
         self._callback = None  # 保持回调引用，防止被 GC
+        if sys.platform != "win32":
+            self._err = "teVirtualMIDI 仅支持 Windows；当前使用系统 MIDI 端口"
+            return
         dll_path = _find_tevirtualmidi_dll()
         if not dll_path:
             self._err = "未找到 teVirtualMIDI64.dll"

@@ -3,12 +3,13 @@
 import json
 import threading
 import time
+from pathlib import Path
 
 import webview
 
 from . import __version__, APP_NAME
 from .bus import EventBus
-from .config import ProfileManager, DEFAULTS
+from .config import DATA_DIR, ProfileManager, DEFAULTS
 from .input.gamepad import GamepadEngine
 from .input.global_hooks import GlobalHooks
 from .learn import LearnManager
@@ -189,18 +190,18 @@ class App:
 
     @property
     def _log_path(self):
-        import sys as _sys
-        from pathlib import Path
-        base = Path(getattr(_sys, "_MEIPASS", "") or Path(__file__).resolve().parent.parent)
-        return base / "gms.log"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        return DATA_DIR / "gms.log"
 
     def _on_gamepad_state(self, connected, name, axes, buttons, mode, running=True,
-                          layout=None, signal="ok", last_input_ago=0):
+                          layout=None, signal="ok", last_input_ago=0,
+                          xy_active=None):
         self.push_state(fragment={
             "gamepad": {"connected": connected, "name": name, "axes": axes,
                         "buttons": buttons, "mode": mode, "running": running,
                         "layout": layout or {}, "signal": signal,
-                        "last_input_ago": last_input_ago}})
+                        "last_input_ago": last_input_ago,
+                        "xy_active": xy_active or {"left": False, "right": False}}})
 
     def _on_virtual_state(self, available, running, error):
         self.push_state(fragment={"virtual": {"available": available, "running": running,
@@ -321,7 +322,8 @@ class App:
         self.hooks.start()
         vm = self.config.current()["virtual_midi"]
         if vm.get("enabled"):
-            self.ports.start(vm.get("port_name", "Gamepad MIDI 1"))
+            self.ports.start(vm.get("port_name", "Gamepad MIDI 1"),
+                             backend_name=vm.get("backend", "tevirtualmidi"))
         # 手柄引擎常驻启动
         self.gamepad.start()
         self.start_all_enabled()
@@ -355,6 +357,7 @@ class App:
             return {"running": self.gamepad.running, "connected": False, "name": "",
                     "axes": [], "buttons": [], "layout": {}, "signal": "ok",
                     "last_input_ago": 0,
+                    "xy_active": {"left": False, "right": False},
                     "mode": self.config.current()["gamepad"].get("mode", "relative")}
 
     def tool_states(self) -> dict:
@@ -391,9 +394,9 @@ class App:
 
     def run(self):
         self.startup()
-        ui = self._ui_path or (__file__.rsplit("\\", 1)[0] + "\\ui\\index.html")
+        ui = Path(self._ui_path) if self._ui_path else Path(__file__).resolve().parent / "ui" / "index.html"
         self._window = webview.create_window(
-            APP_NAME, ui, js_api=Api(self), width=1280, height=860,
+            APP_NAME, str(ui), js_api=Api(self), width=1280, height=860,
             min_size=(1024, 700), background_color="#eae7df")
         self._window.events.loaded += self._on_loaded
         try:

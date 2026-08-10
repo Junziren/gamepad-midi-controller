@@ -50,7 +50,13 @@ install_dependencies.bat        # 或 python -m pip install -r requirements.txt
 python -m gms
 ```
 
-系统要求：Windows 10/11 64 位、Python 3.11+、WebView2 运行时（Win11 自带）。
+系统要求：Python 3.11+。Windows 需要 WebView2 运行时（Win11 自带）；macOS 使用系统 WebKit。
+
+macOS 首次运行全局热键与鼠标工具时，需要在「系统设置 → 隐私与安全性」中为终端或应用授予
+「辅助功能」和「输入监控」权限。蓝牙手柄还需要允许应用访问蓝牙设备。
+
+macOS 当前使用系统 CoreMIDI 输出端口；teVirtualMIDI 与 Windows MIDI Services 仅在 Windows
+上启用。macOS 的 `.app` 构建必须在 macOS 上执行，当前仓库提供构建脚本和图标资源供后续开发者使用。
 
 ## 🔌 虚拟 MIDI 端口（双内核）
 
@@ -71,6 +77,16 @@ python -m unittest discover -s tests -v
 build.bat   # 产物：dist\GamepadMIDIStudio\GamepadMIDIStudio.exe
 ```
 
+Windows 构建使用 `assets\icon.ico`。macOS 构建：
+
+```bash
+bash build_macos.sh   # 产物：dist/GamepadMIDIStudio/GamepadMIDIStudio.app
+```
+
+macOS 构建使用 `assets/icon.icns`。应用配置与日志在打包运行时写入用户数据目录，避免写入只读的
+`.app` 包；可用 `GMS_DATA_DIR` 覆盖目录位置。Windows 源码运行仍使用仓库内的 `profiles/`，
+Windows 打包运行使用 `%APPDATA%/GamepadMIDIStudio/`。
+
 打包后首次运行仍会自动创建虚拟 MIDI 端口；若目标机器缺少 teVirtualMIDI 驱动，将自动降级为系统端口模式。
 
 ## 🗂 目录结构
@@ -83,12 +99,13 @@ gms/
   config.py             # 多预设 Profile + 旧版配置迁移
   core.py               # 纯计算函数（曲线/映射/音序器/规则）
   learn.py              # MIDI Learn 管理器
-  midi/                 # teVirtualMIDI 内核 + MIDI 输出引擎
-  input/                # Windows HID/SDL 输入适配 + 手柄引擎 + 全局钩子
+  midi/                 # 虚拟 MIDI 内核 + 系统 MIDI 输出引擎
+  input/                # 跨平台 SDL / Windows HID 输入适配 + 手柄引擎 + 全局钩子
   tools/                # 8 个可插拔工具
   ui/                   # 玻璃拟态前端（HTML/CSS/JS）
+assets/                 # Windows .ico / macOS .icns 应用图标
 tests/                  # 单元测试
-profiles/               # 用户预设（不入库）
+profiles/               # 源码运行时用户预设（不入库）
 ```
 
 ## 📝 更新日志

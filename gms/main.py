@@ -6,6 +6,8 @@ import sys
 
 def _already_running() -> bool:
     """Windows 命名互斥体单实例锁：重复启动时返回 True。"""
+    if sys.platform != "win32":
+        return False
     try:
         kernel32 = ctypes.windll.kernel32
         # 句柄是 64 位指针：必须显式声明 restype，否则被截断为 int
@@ -23,12 +25,11 @@ def _already_running() -> bool:
 
 def main():
     if _already_running():
+        message = "Gamepad MIDI Studio 已在运行。请使用已打开的窗口，不要重复启动。"
         try:
-            ctypes.windll.user32.MessageBoxW(
-                None, "Gamepad MIDI Studio 已在运行。\n请使用已打开的窗口，不要重复启动。",
-                "Gamepad MIDI Studio", 0x40)
+            ctypes.windll.user32.MessageBoxW(None, message, "Gamepad MIDI Studio", 0x40)
         except Exception:
-            pass
+            print(message, file=sys.stderr)
         return 0
     from .app import App
     app = App()

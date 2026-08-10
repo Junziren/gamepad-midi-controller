@@ -149,6 +149,36 @@ class TestCoordinateAbsoluteMode(unittest.TestCase):
         eng._handle_xy_absolute(cfg["gamepad"])
         self.assertEqual(midi.calls, [])
 
+    def test_snapshot_gates_unheld_sticks_in_absolute_mode(self):
+        eng, _, cfg = make_engine()
+        cfg["gamepad"]["mode"] = "xy_absolute"
+        eng.joystick._axes[:4] = [0.8, -0.6, -0.4, 0.7]
+
+        snapshot = eng.state_snapshot()
+
+        self.assertEqual(snapshot["xy_active"], {"left": False, "right": False})
+        self.assertEqual(snapshot["axes"][:4], [0.0, 0.0, 0.0, 0.0])
+
+    def test_snapshot_only_exposes_held_stick_in_absolute_mode(self):
+        eng, _, cfg = make_engine()
+        cfg["gamepad"]["mode"] = "xy_absolute"
+        eng.joystick._axes[:4] = [0.8, -0.6, -0.4, 0.7]
+        eng.joystick._buttons[8] = True
+
+        snapshot = eng.state_snapshot()
+
+        self.assertEqual(snapshot["xy_active"], {"left": True, "right": False})
+        self.assertEqual(snapshot["axes"][:4], [0.8, -0.6, 0.0, 0.0])
+
+    def test_relative_snapshot_keeps_both_sticks_visible(self):
+        eng, _, cfg = make_engine()
+        eng.joystick._axes[:4] = [0.8, -0.6, -0.4, 0.7]
+
+        snapshot = eng.state_snapshot()
+
+        self.assertEqual(snapshot["xy_active"], {"left": True, "right": True})
+        self.assertEqual(snapshot["axes"][:4], [0.8, -0.6, -0.4, 0.7])
+
 
 class TestRelativeMode(unittest.TestCase):
     def test_stick_creates_cc_delta(self):

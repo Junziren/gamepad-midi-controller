@@ -3,4 +3,6 @@ pygame>=2.6
 mido>=1.3
 numpy>=2.0
 pynput>=1.8
-pywinusb>=0.4.2
+pywinusb>=0.4.2; sys_platform == "win32"
+pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=9.0; sys_platform == "darwin"

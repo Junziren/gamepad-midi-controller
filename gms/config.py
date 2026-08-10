@@ -3,12 +3,21 @@
 import copy
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 
 
 APP_DIR = Path(__file__).resolve().parent.parent
-PROFILES_DIR = APP_DIR / "profiles"
+if os.environ.get("GMS_DATA_DIR"):
+    DATA_DIR = Path(os.environ["GMS_DATA_DIR"]).expanduser()
+elif sys.platform == "darwin":
+    DATA_DIR = Path.home() / "Library" / "Application Support" / "GamepadMIDIStudio"
+elif sys.platform == "win32" and getattr(sys, "frozen", False):
+    DATA_DIR = Path(os.environ.get("APPDATA", APP_DIR)) / "GamepadMIDIStudio"
+else:
+    DATA_DIR = APP_DIR
+PROFILES_DIR = DATA_DIR / "profiles"
 LEGACY_CONFIG = APP_DIR / "gamepad_midi_config.json"
 
 
