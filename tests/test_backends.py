@@ -15,6 +15,10 @@ class FakeDLL:
         self.calls.append((handle, bytes(buf[:length]), length))
         return 1
 
+    def virtualMIDICreatePortEx2(self, *args):
+        self.calls.append(args)
+        return 42
+
 
 def make_backend():
     from gms.midi.backends import TeVirtualMidiBackend
@@ -25,6 +29,16 @@ def make_backend():
 
 
 class TestTeVirtualMidiSend(unittest.TestCase):
+    def test_create_port_uses_native_five_argument_api(self):
+        backend = make_backend()
+        self.assertEqual(backend.create_port("Gamepad MIDI Test"), 42)
+        name, callback, context, maximum_sysex, flags = backend._dll.calls[0]
+        self.assertEqual(name, "Gamepad MIDI Test")
+        self.assertIsNone(callback.value)
+        self.assertEqual(context, 0)
+        self.assertEqual(maximum_sysex, 65536)
+        self.assertEqual(flags, 1)
+
     def test_send_accepts_bytearray(self):
         """回归：mido.Message.bytes() 返回 bytearray，必须被接受。"""
         backend = make_backend()

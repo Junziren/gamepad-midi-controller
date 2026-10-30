@@ -73,17 +73,16 @@ class TeVirtualMidiBackend(VirtualMidiBackend):
             self._err = "未找到 teVirtualMIDI64.dll"
             return
         try:
-            self._dll = ctypes.WinDLL(dll_path)
+            self._dll = ctypes.WinDLL(dll_path, use_last_error=True)
         except OSError as exc:
             self._err = f"加载失败: {exc}"
             return
         self._dll.virtualMIDICreatePortEx2.restype = wintypes.HANDLE
         self._dll.virtualMIDICreatePortEx2.argtypes = [
-            wintypes.LPCWSTR, wintypes.LPCWSTR,
-            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
-            ctypes.c_uint32, ctypes.c_uint32,
+            wintypes.LPCWSTR, ctypes.c_void_p, ctypes.c_size_t,
+            wintypes.DWORD, wintypes.DWORD,
         ]
-        self._dll.virtualMIDIClosePort.restype = wintypes.BOOL
+        self._dll.virtualMIDIClosePort.restype = None
         self._dll.virtualMIDIClosePort.argtypes = [wintypes.HANDLE]
         self._dll.virtualMIDISendData.restype = wintypes.BOOL
         self._dll.virtualMIDISendData.argtypes = [
@@ -101,8 +100,8 @@ class TeVirtualMidiBackend(VirtualMidiBackend):
             raise RuntimeError(self._err or "内核不可用")
         callback = ctypes.cast(None, ctypes.c_void_p)
         if on_input is not None:
-            CB = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte),
-                                  ctypes.c_uint32, ctypes.c_uint32)
+            CB = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, ctypes.POINTER(ctypes.c_ubyte),
+                                   wintypes.DWORD, ctypes.c_size_t)
             def _cb(port_handle, data_ptr, length, instance):
                 try:
                     on_input(bytes(bytearray(data_ptr[i] for i in range(length))))
@@ -111,15 +110,17 @@ class TeVirtualMidiBackend(VirtualMidiBackend):
             self._callback = CB(_cb)
             callback = ctypes.cast(self._callback, ctypes.c_void_p)
         handle = self._dll.virtualMIDICreatePortEx2(
-            port_name, "Gamepad MIDI Studio", callback, 0, 0, 65536, 0)
+            port_name, callback, 0, 65536, 1)
         if not handle:
-            raise RuntimeError(f"创建虚拟端口 '{port_name}' 失败（可能端口名已被占用）")
+            error = ctypes.get_last_error()
+            raise RuntimeError(f"创建虚拟端口 '{port_name}' 失败：{ctypes.FormatError(error).strip()}")
         return handle
 
     def close_port(self, handle) -> None:
         if handle:
             try:
                 self._dll.virtualMIDIClosePort(handle)
+                self._callback = None
             except Exception:
                 pass
 
